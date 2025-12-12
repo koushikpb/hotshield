@@ -22,4 +22,4 @@ docker compose up -d
 ./gradlew bootRun
 ```
 
-Java 21 required. Generate the Gradle wrapper first with `gradle wrapper` if it's missing.
+Java 21 and a running Docker daemon required (tests use Testcontainers).
