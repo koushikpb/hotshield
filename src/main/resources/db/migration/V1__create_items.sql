@@ -1,0 +1,2 @@
+-- Milestone 1: write the table, the seed, and the category index yourself.
+-- Columns: id, sku, name, category, price_cents, stock, version, updated_at (see docs/PLAN.md).

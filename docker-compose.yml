@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: hotshield
+      POSTGRES_USER: hotshield
+      POSTGRES_PASSWORD: hotshield
+    ports:
+      - "5432:5432"
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # Milestone 5: add node-a, node-b, node-c built from the Dockerfile, each with NODE_ID and PEERS set.
+
+volumes:
+  pgdata:

@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: hotshield
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/hotshield}
+    username: ${DB_USER:hotshield}
+    password: ${DB_PASSWORD:hotshield}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+  threads:
+    virtual:
+      enabled: true
+
+hotshield:
+  mode: ${HOTSHIELD_MODE:direct}   # direct | cache | coalesce | distributed
+  node-id: ${NODE_ID:node-a}
+  peers: ${PEERS:}                  # comma-separated base URLs, used in distributed mode
+  cache:
+    max-size: 100000
+    ttl: 30s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
