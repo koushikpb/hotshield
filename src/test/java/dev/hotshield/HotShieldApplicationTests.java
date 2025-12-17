@@ -31,4 +31,11 @@ class HotShieldApplicationTests {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).contains("\"status\":\"UP\"");
     }
+
+    @Test
+    void cacheHitAndMissMetricsAreExposed() {
+        var response = http.getForEntity("/actuator/metrics/cache.gets?tag=cache:items&tag=result:miss", String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
 }
