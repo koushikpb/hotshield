@@ -2,6 +2,7 @@ package dev.hotshield.item;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -96,6 +97,8 @@ class ItemRepositoryTest {
         repository.findById(999);
         repository.findByCategory("home", 0, 10);
 
-        assertThat(registry.get("db.queries").counter().count()).isEqualTo(3);
+        var total = registry.get("db.queries").counters().stream().mapToDouble(Counter::count).sum();
+        assertThat(total).isEqualTo(3);
+        assertThat(registry.get("db.queries").tag("op", "findById").counter().count()).isEqualTo(2);
     }
 }
