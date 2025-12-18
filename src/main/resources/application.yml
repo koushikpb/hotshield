@@ -8,6 +8,11 @@ spring:
     hikari:
       maximum-pool-size: ${DB_POOL_SIZE:10}
       connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:2000}
+  jackson:
+    deserialization:
+      # A PUT missing priceCents or stock would otherwise write 0 for them.
+      fail-on-missing-creator-properties: true
+      fail-on-null-for-primitives: true
   threads:
     virtual:
       enabled: true

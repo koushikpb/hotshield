@@ -25,6 +25,9 @@ public class ItemController {
 
     @PutMapping("/items/{id}")
     public ResponseEntity<Item> update(@PathVariable long id, @RequestBody ItemUpdate update) {
+        if (update.name() == null) {
+            return ResponseEntity.badRequest().build();
+        }
         return ResponseEntity.of(items.update(id, update));
     }
 
@@ -34,6 +37,6 @@ public class ItemController {
             @RequestParam String category,
             @RequestParam(defaultValue = "0") int minPrice,
             @RequestParam(defaultValue = "50") int limit) {
-        return items.findByCategory(category, minPrice, Math.min(limit, 200));
+        return items.findByCategory(category, minPrice, Math.clamp(limit, 1, 200));
     }
 }

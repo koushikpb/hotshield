@@ -56,6 +56,28 @@ class ItemControllerTest {
     }
 
     @Test
+    void updateWithMissingFieldIs400() throws Exception {
+        mvc.perform(put("/items/1").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"x\"}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void updateWithNullNameIs400() throws Exception {
+        mvc.perform(put("/items/1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":null,\"priceCents\":1,\"stock\":1}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void negativeLimitIsRaisedToOne() throws Exception {
+        mvc.perform(get("/items").param("category", "kitchen").param("limit", "-1"))
+                .andExpect(status().isOk());
+
+        verify(items).findByCategory("kitchen", 0, 1);
+    }
+
+    @Test
     void categoryLimitIsCapped() throws Exception {
         when(items.findByCategory("kitchen", 0, 200)).thenReturn(List.of());
 
