@@ -13,6 +13,8 @@ import dev.hotshield.HotShieldProperties.Mode;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import org.junit.jupiter.api.Test;
 
 class ItemServiceTest {
@@ -68,5 +70,29 @@ class ItemServiceTest {
         service.update(1, new ItemUpdate("new", 1, 1));
 
         assertThat(cache.getIfPresent(1L)).isNull();
+    }
+
+    // Fails until SingleFlight is written (milestone 3).
+    @Test
+    void coalesceModeSharesOneReadAcrossConcurrentMisses() throws Exception {
+        int callers = 1_000;
+        var allStarted = new CountDownLatch(callers);
+        when(repository.findById(1)).thenAnswer(invocation -> {
+            allStarted.await();
+            Thread.sleep(200);
+            return Optional.of(ItemControllerTest.item(1));
+        });
+        var service = service(Mode.COALESCE);
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (int i = 0; i < callers; i++) {
+                executor.submit(() -> {
+                    allStarted.countDown();
+                    return service.get(1);
+                });
+            }
+        }
+
+        verify(repository, times(1)).findById(1);
     }
 }
