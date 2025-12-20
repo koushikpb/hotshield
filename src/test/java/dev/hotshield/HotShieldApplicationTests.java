@@ -34,8 +34,10 @@ class HotShieldApplicationTests {
 
     @Test
     void cacheHitAndMissMetricsAreExposed() {
-        var response = http.getForEntity("/actuator/metrics/cache.gets?tag=cache:items&tag=result:miss", String.class);
+        var misses = http.getForEntity("/actuator/metrics/cache.gets?tag=cache:items&tag=result:miss", String.class);
+        var hits = http.getForEntity("/actuator/metrics/cache.gets?tag=cache:items&tag=result:hit", String.class);
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(misses.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(hits.getStatusCode()).isEqualTo(HttpStatus.OK);
     }
 }

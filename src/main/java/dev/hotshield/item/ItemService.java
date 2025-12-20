@@ -55,12 +55,14 @@ public class ItemService {
         });
     }
 
-    // Invalidate after the write commits. A miss that read the old row before this can still put it back;
-    // milestone 6 closes that race with a version check.
+    // Invalidate after the write, even if it threw: a dropped connection can still mean the UPDATE committed.
+    // A miss that read the old row before this can still put it back; milestone 6 closes that race.
     public Optional<Item> update(long id, ItemUpdate update) {
-        Optional<Item> updated = repository.update(id, update);
-        cache.invalidate(id);
-        return updated;
+        try {
+            return repository.update(id, update);
+        } finally {
+            cache.invalidate(id);
+        }
     }
 
     public List<Item> findByCategory(String category, int minPriceCents, int limit) {
