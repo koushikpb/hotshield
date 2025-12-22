@@ -2,7 +2,7 @@ spring:
   application:
     name: hotshield
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/hotshield}
+    url: ${DB_URL:jdbc:postgresql://localhost:5434/hotshield}
     username: ${DB_USER:hotshield}
     password: ${DB_PASSWORD:hotshield}
     hikari:

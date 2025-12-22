@@ -22,4 +22,5 @@ docker compose up -d
 ./gradlew bootRun
 ```
 
-Java 21 and a running Docker daemon required (tests use Testcontainers).
+Java 21 and a running Docker daemon required (tests use Testcontainers). Compose publishes Postgres on host port
+5434 (override with `PG_HOST_PORT`) so a locally installed Postgres on 5432 is never used by mistake.
