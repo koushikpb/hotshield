@@ -23,6 +23,11 @@ public class ItemController {
         return ResponseEntity.of(items.get(id));
     }
 
+    @GetMapping("/internal/items/{id}")
+    public ResponseEntity<Item> getAsOwner(@PathVariable long id) {
+        return ResponseEntity.of(items.getAsOwner(id));
+    }
+
     @PutMapping("/items/{id}")
     public ResponseEntity<Item> update(@PathVariable long id, @RequestBody ItemUpdate update) {
         if (update.name() == null) {

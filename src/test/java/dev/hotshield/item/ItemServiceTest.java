@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -12,12 +13,15 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import dev.hotshield.HotShieldProperties;
+import dev.hotshield.cluster.Cluster;
+import dev.hotshield.cluster.OwnerClient;
 import dev.hotshield.HotShieldProperties.Mode;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import org.springframework.web.client.RestClientException;
 import org.junit.jupiter.api.Test;
 
 class ItemServiceTest {
@@ -25,9 +29,16 @@ class ItemServiceTest {
     ItemRepository repository = mock(ItemRepository.class);
     Cache<Long, Item> cache = Caffeine.newBuilder().build();
 
+    Cluster cluster = mock(Cluster.class);
+    OwnerClient owners = mock(OwnerClient.class);
+
+    static HotShieldProperties properties(Mode mode) {
+        return new HotShieldProperties(
+                mode, "node-a", List.of(), Duration.ofMillis(500), new HotShieldProperties.Cache(100, Duration.ofMinutes(1)));
+    }
+
     ItemService service(Mode mode) {
-        var properties = new HotShieldProperties(mode, "node-a", List.of(), new HotShieldProperties.Cache(100, Duration.ofMinutes(1)));
-        return new ItemService(repository, cache, properties);
+        return new ItemService(repository, cache, properties(mode), cluster, owners);
     }
 
     @Test
@@ -92,16 +103,60 @@ class ItemServiceTest {
     @Test
     void cacheModeRecordsHitsAndMisses() {
         var registry = new SimpleMeterRegistry();
-        var properties = new HotShieldProperties(Mode.CACHE, "node-a", List.of(), new HotShieldProperties.Cache(100, Duration.ofMinutes(1)));
+        var properties = properties(Mode.CACHE);
         var meteredCache = new ItemCacheConfig().itemCache(properties, registry);
         when(repository.findById(1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
-        var service = new ItemService(repository, meteredCache, properties);
+        var service = new ItemService(repository, meteredCache, properties, cluster, owners);
 
         service.get(1);
         service.get(1);
 
         assertThat(registry.get("cache.gets").tags("cache", "items", "result", "miss").functionCounter().count()).isEqualTo(1);
         assertThat(registry.get("cache.gets").tags("cache", "items", "result", "hit").functionCounter().count()).isEqualTo(1);
+    }
+
+    // The distributed tests below go through SingleFlight on a miss, so they fail until it is written.
+    @Test
+    void ownerReadsLocally() {
+        when(cluster.ownerOf(1)).thenReturn("node-a");
+        when(cluster.isSelf("node-a")).thenReturn(true);
+        when(repository.findById(1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
+
+        assertThat(service(Mode.DISTRIBUTED).get(1)).isPresent();
+        verify(owners, never()).fetch(any(), any(Long.class));
+    }
+
+    @Test
+    void nonOwnerForwardsMissAndCachesTheResult() {
+        when(cluster.ownerOf(1)).thenReturn("node-b");
+        when(cluster.baseUrl("node-b")).thenReturn("http://node-b:8080");
+        when(owners.fetch("http://node-b:8080", 1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
+        var service = service(Mode.DISTRIBUTED);
+
+        service.get(1);
+        service.get(1);
+
+        verify(owners, times(1)).fetch("http://node-b:8080", 1);
+        verify(repository, never()).findById(1);
+    }
+
+    @Test
+    void nonOwnerFallsBackToDatabaseWhenOwnerFails() {
+        when(cluster.ownerOf(1)).thenReturn("node-b");
+        when(cluster.baseUrl("node-b")).thenReturn("http://node-b:8080");
+        when(owners.fetch("http://node-b:8080", 1)).thenThrow(new RestClientException("timed out"));
+        when(repository.findById(1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
+
+        assertThat(service(Mode.DISTRIBUTED).get(1)).isPresent();
+        verify(repository).findById(1);
+    }
+
+    @Test
+    void ownerEndpointNeverForwards() {
+        when(repository.findById(1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
+
+        assertThat(service(Mode.DISTRIBUTED).getAsOwner(1)).isPresent();
+        verify(owners, never()).fetch(any(), any(Long.class));
     }
 
     // Fails until SingleFlight is written (milestone 3).
