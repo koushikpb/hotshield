@@ -22,9 +22,10 @@ hotshield:
   node-id: ${NODE_ID:node-a}
   peers: ${PEERS:}                  # id=url pairs, self included: node-a=http://node-a:8080,node-b=...
   forward-timeout: ${FORWARD_TIMEOUT:500ms}
+  db-delay: ${HOTSHIELD_DB_DELAY:0ms}      # herd runs only, see loadtest/README.md
   cache:
-    max-size: 100000
-    ttl: 30s
+    max-size: ${HOTSHIELD_CACHE_MAX_SIZE:100000}
+    ttl: ${HOTSHIELD_CACHE_TTL:30s}
 
 management:
   endpoints:

@@ -5,7 +5,8 @@ import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("hotshield")
-public record HotShieldProperties(Mode mode, String nodeId, List<String> peers, Duration forwardTimeout, Cache cache) {
+public record HotShieldProperties(
+        Mode mode, String nodeId, List<String> peers, Duration forwardTimeout, Duration dbDelay, Cache cache) {
 
     public enum Mode { DIRECT, CACHE, COALESCE, DISTRIBUTED }
 

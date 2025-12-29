@@ -39,7 +39,7 @@ class OwnerClientTest {
         server.start();
         baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
         var properties = new HotShieldProperties(HotShieldProperties.Mode.DISTRIBUTED, "node-a", List.of(),
-                Duration.ofMillis(300), new HotShieldProperties.Cache(10, Duration.ofSeconds(30)));
+                Duration.ofMillis(300), Duration.ZERO, new HotShieldProperties.Cache(10, Duration.ofSeconds(30)));
         client = new OwnerClient(RestClient.builder(), properties);
     }
 

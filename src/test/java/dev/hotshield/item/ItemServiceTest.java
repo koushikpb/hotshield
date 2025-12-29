@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.web.client.RestClientException;
 import org.junit.jupiter.api.Test;
 
@@ -34,11 +35,11 @@ class ItemServiceTest {
 
     static HotShieldProperties properties(Mode mode) {
         return new HotShieldProperties(
-                mode, "node-a", List.of(), Duration.ofMillis(500), new HotShieldProperties.Cache(100, Duration.ofMinutes(1)));
+                mode, "node-a", List.of(), Duration.ofMillis(500), Duration.ZERO, new HotShieldProperties.Cache(100, Duration.ofMinutes(1)));
     }
 
     ItemService service(Mode mode) {
-        return new ItemService(repository, cache, properties(mode), cluster, owners);
+        return new ItemService(repository, cache, properties(mode), cluster, owners, TransactionOperations.withoutTransaction());
     }
 
     @Test
@@ -106,13 +107,27 @@ class ItemServiceTest {
         var properties = properties(Mode.CACHE);
         var meteredCache = new ItemCacheConfig().itemCache(properties, registry);
         when(repository.findById(1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
-        var service = new ItemService(repository, meteredCache, properties, cluster, owners);
+        var service = new ItemService(repository, meteredCache, properties, cluster, owners, TransactionOperations.withoutTransaction());
 
         service.get(1);
         service.get(1);
 
         assertThat(registry.get("cache.gets").tags("cache", "items", "result", "miss").functionCounter().count()).isEqualTo(1);
         assertThat(registry.get("cache.gets").tags("cache", "items", "result", "hit").functionCounter().count()).isEqualTo(1);
+    }
+
+    @Test
+    void dbDelayRunsTheReadInsideATransaction() {
+        var transactions = mock(TransactionOperations.class);
+        when(transactions.execute(any())).thenAnswer(invocation ->
+                invocation.<org.springframework.transaction.support.TransactionCallback<?>>getArgument(0).doInTransaction(null));
+        when(repository.findById(1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
+        var properties = new HotShieldProperties(Mode.DIRECT, "node-a", List.of(), Duration.ofMillis(500),
+                Duration.ofMillis(20), new HotShieldProperties.Cache(100, Duration.ofMinutes(1)));
+        var service = new ItemService(repository, cache, properties, cluster, owners, transactions);
+
+        assertThat(service.get(1)).isPresent();
+        verify(transactions).execute(any());
     }
 
     // The distributed tests below go through SingleFlight on a miss, so they fail until it is written.
