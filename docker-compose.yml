@@ -11,8 +11,45 @@ services:
     command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "hotshield"]
+      interval: 2s
+      retries: 15
 
-  # Milestone 5: add node-a, node-b, node-c built from the Dockerfile, each with NODE_ID and PEERS set.
+  # Three nodes behind nginx, standing in for ECS tasks behind the ALB. Started only with
+  # `docker compose --profile cluster up -d --build`, so plain `docker compose up -d` stays Postgres-only.
+  node-a: &node
+    profiles: [cluster]
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: &node-env
+      NODE_ID: node-a
+      PEERS: node-a=http://node-a:8080,node-b=http://node-b:8080,node-c=http://node-c:8080
+      HOTSHIELD_MODE: ${HOTSHIELD_MODE:-distributed}
+      HOTSHIELD_CACHE_TTL: ${HOTSHIELD_CACHE_TTL:-30s}
+      HOTSHIELD_DB_DELAY: ${HOTSHIELD_DB_DELAY:-0ms}
+      DB_URL: jdbc:postgresql://postgres:5432/hotshield
+  node-b:
+    <<: *node
+    environment:
+      <<: *node-env
+      NODE_ID: node-b
+  node-c:
+    <<: *node
+    environment:
+      <<: *node-env
+      NODE_ID: node-c
+
+  lb:
+    profiles: [cluster]
+    image: nginx:1.27-alpine
+    depends_on: [node-a, node-b, node-c]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./infra/nginx.conf:/etc/nginx/nginx.conf:ro
 
 volumes:
   pgdata:
