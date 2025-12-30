@@ -37,3 +37,8 @@ dependencies {
 tasks.withType<Test> {
     useJUnitPlatform()
 }
+
+// A fixed name so the Dockerfile doesn't need a glob that breaks on a version bump.
+tasks.bootJar {
+    archiveFileName = "app.jar"
+}
