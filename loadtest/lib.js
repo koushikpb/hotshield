@@ -11,23 +11,33 @@ export const RATE = Number(__ENV.RATE || 200);
 export const DURATION = __ENV.DURATION || '30s';
 export const WARMUP = __ENV.WARMUP || '10s';
 
-export const READ_TAGS = { tags: { name: 'GET /items/{id}' } };
+// k6's default timeout is 60s. 5s sits above Hikari's 2s connection-timeout, so a request stuck
+// waiting for a pooled connection comes back as a 5xx from the server instead of being cut off by
+// the client, and the failure shows up as what it is.
+const TIMEOUT = '5s';
+
+export const READ_TAGS = { tags: { name: 'GET /items/{id}' }, timeout: TIMEOUT };
 export const WRITE_TAGS = {
   headers: { 'Content-Type': 'application/json' },
   tags: { name: 'PUT /items/{id}' },
+  timeout: TIMEOUT,
 };
 
 // Open loop: requests start on schedule even when responses are slow, so latency isn't hidden
 // by the generator waiting (coordinated omission).
-function arrivals(duration, startTime) {
+// VUs scale with RATE: by Little's law in-flight requests are RATE * latency, so a fixed pool
+// that fits 200 req/s starts dropping iterations at higher rates. maxVUs covers RATE * 5s, the
+// worst case where every request runs into the timeout.
+function arrivals(duration, startTime, extra = {}) {
   return {
     executor: 'constant-arrival-rate',
     rate: RATE,
     timeUnit: '1s',
     duration,
     startTime,
-    preAllocatedVUs: 100,
-    maxVUs: 1000,
+    preAllocatedVUs: Math.ceil(RATE * 2.5),
+    maxVUs: Math.ceil(RATE * 5),
+    ...extra,
   };
 }
 
@@ -36,15 +46,23 @@ function arrivals(duration, startTime) {
 export function buildOptions(extraScenarios = {}, extraThresholds = {}) {
   return {
     scenarios: {
-      warmup: arrivals(WARMUP, '0s'),
+      // Without gracefulStop: '0s', warmup iterations still in flight would overlap the start of
+      // the measured phase and add load the measured rate doesn't account for.
+      warmup: arrivals(WARMUP, '0s', { gracefulStop: '0s' }),
       measured: arrivals(DURATION, WARMUP),
       ...extraScenarios,
     },
     thresholds: {
       // A generator that falls behind is no longer open loop; fail the run instead of reporting it.
+      // The per-scenario entries only make the summary say which phase dropped.
       dropped_iterations: ['count==0'],
+      'dropped_iterations{scenario:warmup}': ['count==0'],
+      'dropped_iterations{scenario:measured}': ['count==0'],
       // Only the measured scenario counts; these entries make the summary print it separately.
+      // Achieved req/s is the measured http_reqs count divided by DURATION.
       'http_req_duration{scenario:measured}': ['p(99)>=0'],
+      'http_reqs{scenario:measured}': ['count>=0'],
+      'http_req_failed{scenario:measured}': ['rate>=0'],
       'checks{scenario:measured}': ['rate>=0'],
       ...extraThresholds,
     },
@@ -80,7 +98,11 @@ function mix32(x) {
 export function uniform01(stream = 0) {
   const phase = exec.scenario.name === 'warmup' ? 1 : 0;
   let x = Math.imul(exec.scenario.iterationInTest + 1, 0x9e3779b1);
-  x ^= mix32(SEED * 0x85ebca6b + stream * 0xc2b2ae35 + phase * 0x27d4eb2f);
+  // Math.imul keeps the products in 32-bit integer arithmetic; a plain * is a float multiply and
+  // loses low bits once the product passes 2^53.
+  const salt = Math.imul(SEED, 0x85ebca6b) + Math.imul(stream, 0xc2b2ae35)
+    + Math.imul(phase, 0x27d4eb2f);
+  x ^= mix32(salt | 0);
   return mix32(x) / 4294967296;
 }
 

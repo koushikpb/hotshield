@@ -43,7 +43,8 @@ export const options = {
 // Keyed on the global iteration number, not the VU, because VU assignment under an arrival-rate
 // executor changes between runs. Same SEED and rate give the same id sequence.
 function idFor(iteration) {
-  let x = (iteration + 1) * 0x9e3779b1 + SEED * 0x85ebca6b;
+  // Math.imul instead of *, so the mix stays integer math past 2^53 (about 2M iterations).
+  let x = (Math.imul(iteration + 1, 0x9e3779b1) + Math.imul(SEED, 0x85ebca6b)) | 0;
   x = Math.imul(x ^ (x >>> 16), 0x7feb352d);
   x = Math.imul(x ^ (x >>> 15), 0x846ca68b);
   x = (x ^ (x >>> 16)) >>> 0;

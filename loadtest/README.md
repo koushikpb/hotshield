@@ -10,9 +10,11 @@ iteration, because at that point it has stopped being open loop.
 - `flash.js` — `FLASH_SHARE` of requests to one id, rest Zipf
 - `mixed.js` — 95/5 read/write on Zipf keys (invalidation experiments)
 - `herd.js` — flash traffic plus one PUT to the flash id mid-run, so its cached copy is dropped
-  while many reads for it are in flight
+  while many reads for it are in flight, then a burst of `BURST_VUS` reads of the flash id
+  `BURST_DELAY` after the PUT (reported as `{scenario:burst}`)
 - `lib.js` — shared options, seeded random draws, Zipf sampler
 - `baseline.js` — the milestone 1 script, kept so earlier runs stay reproducible
+- `poll-metrics.sh` — samples the `findById` query counter once a second (for herd runs)
 
 ## Running
 
@@ -27,6 +29,34 @@ docker run --rm -i --network host -v "$PWD/loadtest:/scripts" grafana/k6:latest 
 Swap `zipf.js` for any other scenario. To look at latency over time (the herd spike is invisible
 in a whole-run p99), mount a directory outside the repo
 (`-v /tmp/k6:/out`), add `--out csv=/out/herd.csv`, and plot `http_req_duration`.
+
+Achieved throughput is the `http_reqs{scenario:measured}` count divided by `DURATION`, not the
+whole-run `http_reqs` rate, which also counts warmup.
+
+Every request has a 5s client timeout, above Hikari's 2s connection-timeout, so pool exhaustion
+shows up as server 5xx in `http_req_failed{scenario:measured}` rather than as client timeouts.
+
+### Herd runs
+
+Start the app with two extra settings:
+
+- `HOTSHIELD_CACHE_TTL=10m`, so a TTL expiry on the flash id can't land near the PUT and blur
+  which event caused the misses.
+- `HOTSHIELD_DB_DELAY=20ms`, an artificial delay before every `findById` (default 0, herd runs
+  only). A local primary-key lookup returns so quickly that concurrent
+  misses barely overlap, which leaves nothing to coalesce.
+
+Record both values in the `docs/EXPERIMENTS.md` entry; results with a different delay aren't
+comparable.
+
+The Prometheus default 15s scrape is too coarse to see a spike that lasts under a second. Run
+`poll-metrics.sh` alongside k6 and read the per-second deltas of the count (it needs `python3`):
+
+```
+BASE_URL=http://localhost:8080 loadtest/poll-metrics.sh > /tmp/k6/herd-queries.csv &
+# ... k6 run herd.js ...
+kill %1
+```
 
 ## Environment variables
 
@@ -43,6 +73,8 @@ in a whole-run p99), mount a directory outside the repo
 | `FLASH_SHARE` | `0.5` | flash, herd |
 | `WRITE_SHARE` | `0.05` | mixed |
 | `HERD_AT` | `20s` | herd, offset of the PUT into the measured phase (must be < `DURATION`) |
+| `BURST_VUS` | `200` | herd, reads of the flash id fired together after the PUT |
+| `BURST_DELAY` | `50ms` | herd, how long after the PUT starts the burst fires |
 
 ## Rules
 
@@ -52,6 +84,15 @@ in a whole-run p99), mount a directory outside the repo
   VU number, so the same settings replay the same requests.
 - Reset `pg_stat_statements` before each run, and record pool size, `hikaricp.connections.pending`
   and `dropped_iterations` with the results.
+- Restart the app between modes. Counters such as `cache.gets` are cumulative, and a warm cache
+  from the previous mode would leak into the next one.
+- `mixed.js` and `herd.js` write rows. Reseed after them, or keep a fixed run order so every
+  mode sees the same data.
+- Postgres' buffer cache carries over between runs, so the second mode tested reads from warmer
+  pages than the first. Either run one discarded warmup pass before the measured runs or restart
+  Postgres between them; pick one and record which in the experiment entry.
+- When the app runs in a container, `DB_URL` must point at `postgres:5432`, not `localhost`
+  (`docker-compose.yml` sets it).
 - The Zipf CDF is built once per k6 process at startup; expect a short pause before the first
   request at 1M ids.
 
