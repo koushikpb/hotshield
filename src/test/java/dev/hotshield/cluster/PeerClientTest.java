@@ -17,11 +17,11 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 // A real HTTP server, so the timeout is exercised on an actual socket rather than a mock.
-class OwnerClientTest {
+class PeerClientTest {
 
     HttpServer server;
     String baseUrl;
-    OwnerClient client;
+    PeerClient client;
 
     @BeforeEach
     void start() throws IOException {
@@ -39,8 +39,8 @@ class OwnerClientTest {
         server.start();
         baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
         var properties = new HotShieldProperties(HotShieldProperties.Mode.DISTRIBUTED, "node-a", List.of(),
-                Duration.ofMillis(300), Duration.ZERO, new HotShieldProperties.Cache(10, Duration.ofSeconds(30)));
-        client = new OwnerClient(RestClient.builder(), properties);
+                Duration.ofMillis(300), Duration.ZERO, new HotShieldProperties.Cache(10, Duration.ofSeconds(30), Duration.ofSeconds(10)));
+        client = new PeerClient(RestClient.builder(), properties);
     }
 
     @AfterEach

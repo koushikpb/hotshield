@@ -12,13 +12,19 @@ import org.springframework.context.annotation.Configuration;
 class ItemCacheConfig {
 
     @Bean
-    Cache<Long, Item> itemCache(HotShieldProperties properties, MeterRegistry registry) {
-        Cache<Long, Item> cache = Caffeine.newBuilder()
+    ItemCache itemCache(HotShieldProperties properties, MeterRegistry registry) {
+        Cache<Long, Item> items = Caffeine.newBuilder()
                 .maximumSize(properties.cache().maxSize())
                 .expireAfterWrite(properties.cache().ttl())
                 .recordStats()
                 .build();
         // Exposes cache.gets{result=hit|miss}, cache.evictions, cache.size under cache=items.
-        return CaffeineCacheMetrics.monitor(registry, cache, "items");
+        CaffeineCacheMetrics.monitor(registry, items, "items");
+        // A tombstone must outlive any read that started before the write, so it is sized from the slowest
+        // read path: a forward that times out and falls back to the database.
+        Cache<Long, Long> tombstones = Caffeine.newBuilder()
+                .expireAfterWrite(properties.cache().tombstoneTtl())
+                .build();
+        return new ItemCache(items, tombstones);
     }
 }

@@ -1,13 +1,17 @@
 package dev.hotshield.item;
 
-import com.github.benmanes.caffeine.cache.Cache;
 import dev.hotshield.HotShieldProperties;
 import dev.hotshield.cluster.Cluster;
-import dev.hotshield.cluster.OwnerClient;
+import dev.hotshield.cluster.PeerClient;
 import dev.hotshield.coalesce.SingleFlight;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.ExecutionException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.client.RestClientException;
@@ -20,28 +24,30 @@ public class ItemService {
     private static final Logger log = LoggerFactory.getLogger(ItemService.class);
 
     private final ItemRepository repository;
-    private final Cache<Long, Item> cache;
+    private final ItemCache cache;
     private final HotShieldProperties.Mode mode;
     private final Cluster cluster;
-    private final OwnerClient owners;
+    private final PeerClient peers;
     private final TransactionOperations transactions;
     private final Duration dbDelay;
+    private final Duration forwardTimeout;
     private final SingleFlight<Long, Optional<Item>> misses = new SingleFlight<>();
 
     public ItemService(
             ItemRepository repository,
-            Cache<Long, Item> cache,
+            ItemCache cache,
             HotShieldProperties properties,
             Cluster cluster,
-            OwnerClient owners,
+            PeerClient peers,
             TransactionOperations transactions) {
         this.repository = repository;
         this.cache = cache;
         this.mode = properties.mode();
         this.cluster = cluster;
-        this.owners = owners;
+        this.peers = peers;
         this.transactions = transactions;
         this.dbDelay = properties.dbDelay();
+        this.forwardTimeout = properties.forwardTimeout();
     }
 
     public Optional<Item> get(long id) {
@@ -62,24 +68,24 @@ public class ItemService {
     // Plain cache-aside on purpose: cache.get(id, loader) would already coalesce concurrent misses per key,
     // and then this mode would measure the same thing as coalesce mode.
     private Optional<Item> getCacheAside(long id) {
-        Item cached = cache.getIfPresent(id);
+        Item cached = cache.get(id);
         if (cached != null) {
             return Optional.of(cached);
         }
         Optional<Item> loaded = readDb(id);
-        loaded.ifPresent(item -> cache.put(id, item));
+        loaded.ifPresent(cache::put);
         return loaded;
     }
 
     // Same as cache-aside, except concurrent misses for one id share a single database read.
     private Optional<Item> getCoalesced(long id) {
-        Item cached = cache.getIfPresent(id);
+        Item cached = cache.get(id);
         if (cached != null) {
             return Optional.of(cached);
         }
         return misses.run(id, () -> {
             Optional<Item> loaded = readDb(id);
-            loaded.ifPresent(item -> cache.put(id, item));
+            loaded.ifPresent(cache::put);
             return loaded;
         });
     }
@@ -91,13 +97,13 @@ public class ItemService {
         if (cluster.isSelf(owner)) {
             return getCoalesced(id);
         }
-        Item cached = cache.getIfPresent(id);
+        Item cached = cache.get(id);
         if (cached != null) {
             return Optional.of(cached);
         }
         return misses.run(id, () -> {
             Optional<Item> loaded = fetchFromOwner(owner, id);
-            loaded.ifPresent(item -> cache.put(id, item));
+            loaded.ifPresent(cache::put);
             return loaded;
         });
     }
@@ -106,7 +112,7 @@ public class ItemService {
     // cross-node coalescing for that key until it recovers.
     private Optional<Item> fetchFromOwner(String owner, long id) {
         try {
-            return owners.fetch(cluster.baseUrl(owner), id);
+            return peers.fetch(cluster.baseUrl(owner), id);
         } catch (RestClientException e) {
             log.warn("owner fetch failed, reading db owner={} key={} error={}", owner, id, e.getMessage());
             return readDb(id);
@@ -135,13 +141,51 @@ public class ItemService {
         }
     }
 
-    // Invalidate after the write, even if it threw: a dropped connection can still mean the UPDATE committed.
-    // A miss that read the old row before this can still put it back; milestone 6 closes that race.
+    // Invalidate after the write, even if it threw: a dropped connection can still mean the UPDATE committed,
+    // and then the new version is unknown.
     public Optional<Item> update(long id, ItemUpdate update) {
+        Optional<Item> updated;
         try {
-            return repository.update(id, update);
-        } finally {
-            cache.invalidate(id);
+            updated = repository.update(id, update);
+        } catch (RuntimeException e) {
+            invalidateEverywhere(id, ItemCache.UNKNOWN_VERSION);
+            throw e;
+        }
+        invalidateEverywhere(id, updated.map(Item::version).orElse(ItemCache.UNKNOWN_VERSION));
+        return updated;
+    }
+
+    public void invalidateLocal(long id, long version) {
+        cache.invalidate(id, version);
+    }
+
+    // The node that took the write tells every peer directly instead of routing through the owner, which would
+    // add a hop to every PUT. Waits at most forwardTimeout so the PUT's latency stays bounded; a peer that
+    // misses the message serves its old copy until the TTL, which is what the staleness experiment measures.
+    private void invalidateEverywhere(long id, long version) {
+        cache.invalidate(id, version);
+        if (mode != HotShieldProperties.Mode.DISTRIBUTED) {
+            return;
+        }
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<?>> sent = cluster.peerUrls().stream()
+                    .<Future<?>>map(url -> executor.submit(() -> peers.invalidate(url, id, version)))
+                    .toList();
+            long deadline = System.nanoTime() + forwardTimeout.toNanos();
+            for (Future<?> send : sent) {
+                awaitInvalidation(send, deadline, id);
+            }
+        }
+    }
+
+    private static void awaitInvalidation(Future<?> send, long deadline, long id) {
+        try {
+            send.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+        } catch (ExecutionException | TimeoutException e) {
+            send.cancel(true);
+            log.warn("invalidate broadcast failed key={} error={}", id, e.toString());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

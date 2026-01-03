@@ -10,5 +10,5 @@ public record HotShieldProperties(
 
     public enum Mode { DIRECT, CACHE, COALESCE, DISTRIBUTED }
 
-    public record Cache(long maxSize, Duration ttl) {}
+    public record Cache(long maxSize, Duration ttl, Duration tombstoneTtl) {}
 }

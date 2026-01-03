@@ -26,6 +26,7 @@ hotshield:
   cache:
     max-size: ${HOTSHIELD_CACHE_MAX_SIZE:100000}
     ttl: ${HOTSHIELD_CACHE_TTL:30s}
+    tombstone-ttl: 10s
 
 management:
   endpoints:

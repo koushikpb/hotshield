@@ -10,17 +10,24 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 @Component
-public class OwnerClient {
+public class PeerClient {
 
     private final RestClient http;
 
-    public OwnerClient(RestClient.Builder builder, HotShieldProperties properties) {
+    public PeerClient(RestClient.Builder builder, HotShieldProperties properties) {
         var client = HttpClient.newBuilder().connectTimeout(properties.forwardTimeout()).build();
         var requests = new JdkClientHttpRequestFactory(client);
         // Bounds the whole wait on the owner. Past this the caller falls back to the database, so a slow or
         // dead owner costs at most this much extra latency per miss.
         requests.setReadTimeout(properties.forwardTimeout());
         this.http = builder.requestFactory(requests).build();
+    }
+
+    public void invalidate(String baseUrl, long id, long version) {
+        http.post()
+                .uri(baseUrl + "/internal/items/{id}/invalidate?version={version}", id, version)
+                .retrieve()
+                .toBodilessEntity();
     }
 
     // Throws RestClientException when the owner is unreachable, times out, or answers with an error.

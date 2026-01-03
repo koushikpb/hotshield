@@ -44,6 +44,13 @@ public class Cluster {
         return self.equals(node);
     }
 
+    public List<String> peerUrls() {
+        return baseUrls.entrySet().stream()
+                .filter(entry -> !isSelf(entry.getKey()))
+                .map(Map.Entry::getValue)
+                .toList();
+    }
+
     public String baseUrl(String node) {
         return baseUrls.get(node);
     }

@@ -9,12 +9,11 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import dev.hotshield.HotShieldProperties;
 import dev.hotshield.cluster.Cluster;
-import dev.hotshield.cluster.OwnerClient;
+import dev.hotshield.cluster.PeerClient;
 import dev.hotshield.HotShieldProperties.Mode;
 import java.time.Duration;
 import java.util.List;
@@ -28,18 +27,18 @@ import org.junit.jupiter.api.Test;
 class ItemServiceTest {
 
     ItemRepository repository = mock(ItemRepository.class);
-    Cache<Long, Item> cache = Caffeine.newBuilder().build();
+    ItemCache cache = new ItemCache(Caffeine.newBuilder().build(), Caffeine.newBuilder().build());
 
     Cluster cluster = mock(Cluster.class);
-    OwnerClient owners = mock(OwnerClient.class);
+    PeerClient peers = mock(PeerClient.class);
 
     static HotShieldProperties properties(Mode mode) {
         return new HotShieldProperties(
-                mode, "node-a", List.of(), Duration.ofMillis(500), Duration.ZERO, new HotShieldProperties.Cache(100, Duration.ofMinutes(1)));
+                mode, "node-a", List.of(), Duration.ofMillis(500), Duration.ZERO, new HotShieldProperties.Cache(100, Duration.ofMinutes(1), Duration.ofSeconds(10)));
     }
 
     ItemService service(Mode mode) {
-        return new ItemService(repository, cache, properties(mode), cluster, owners, TransactionOperations.withoutTransaction());
+        return new ItemService(repository, cache, properties(mode), cluster, peers, TransactionOperations.withoutTransaction());
     }
 
     @Test
@@ -82,7 +81,7 @@ class ItemServiceTest {
         when(repository.update(1, new ItemUpdate("new", 1, 1))).thenReturn(Optional.of(ItemControllerTest.item(1)));
         var service = service(Mode.CACHE);
         service.get(1);
-        assertThat(cache.getIfPresent(1L)).isNotNull();
+        assertThat(cache.get(1L)).isNotNull();
 
         service.update(1, new ItemUpdate("new", 1, 1));
         service.get(1);
@@ -92,13 +91,13 @@ class ItemServiceTest {
 
     @Test
     void failedUpdateStillInvalidates() {
-        cache.put(1L, ItemControllerTest.item(1));
+        cache.put(ItemControllerTest.item(1));
         when(repository.update(any(Long.class), any())).thenThrow(new IllegalStateException("connection dropped"));
         var service = service(Mode.CACHE);
 
         assertThatThrownBy(() -> service.update(1, new ItemUpdate("new", 1, 1)))
                 .isInstanceOf(IllegalStateException.class);
-        assertThat(cache.getIfPresent(1L)).isNull();
+        assertThat(cache.get(1L)).isNull();
     }
 
     @Test
@@ -107,7 +106,7 @@ class ItemServiceTest {
         var properties = properties(Mode.CACHE);
         var meteredCache = new ItemCacheConfig().itemCache(properties, registry);
         when(repository.findById(1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
-        var service = new ItemService(repository, meteredCache, properties, cluster, owners, TransactionOperations.withoutTransaction());
+        var service = new ItemService(repository, meteredCache, properties, cluster, peers, TransactionOperations.withoutTransaction());
 
         service.get(1);
         service.get(1);
@@ -123,8 +122,8 @@ class ItemServiceTest {
                 invocation.<org.springframework.transaction.support.TransactionCallback<?>>getArgument(0).doInTransaction(null));
         when(repository.findById(1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
         var properties = new HotShieldProperties(Mode.DIRECT, "node-a", List.of(), Duration.ofMillis(500),
-                Duration.ofMillis(20), new HotShieldProperties.Cache(100, Duration.ofMinutes(1)));
-        var service = new ItemService(repository, cache, properties, cluster, owners, transactions);
+                Duration.ofMillis(20), new HotShieldProperties.Cache(100, Duration.ofMinutes(1), Duration.ofSeconds(10)));
+        var service = new ItemService(repository, cache, properties, cluster, peers, transactions);
 
         assertThat(service.get(1)).isPresent();
         verify(transactions).execute(any());
@@ -138,20 +137,20 @@ class ItemServiceTest {
         when(repository.findById(1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
 
         assertThat(service(Mode.DISTRIBUTED).get(1)).isPresent();
-        verify(owners, never()).fetch(any(), any(Long.class));
+        verify(peers, never()).fetch(any(), any(Long.class));
     }
 
     @Test
     void nonOwnerForwardsMissAndCachesTheResult() {
         when(cluster.ownerOf(1)).thenReturn("node-b");
         when(cluster.baseUrl("node-b")).thenReturn("http://node-b:8080");
-        when(owners.fetch("http://node-b:8080", 1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
+        when(peers.fetch("http://node-b:8080", 1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
         var service = service(Mode.DISTRIBUTED);
 
         service.get(1);
         service.get(1);
 
-        verify(owners, times(1)).fetch("http://node-b:8080", 1);
+        verify(peers, times(1)).fetch("http://node-b:8080", 1);
         verify(repository, never()).findById(1);
     }
 
@@ -159,7 +158,7 @@ class ItemServiceTest {
     void nonOwnerFallsBackToDatabaseWhenOwnerFails() {
         when(cluster.ownerOf(1)).thenReturn("node-b");
         when(cluster.baseUrl("node-b")).thenReturn("http://node-b:8080");
-        when(owners.fetch("http://node-b:8080", 1)).thenThrow(new RestClientException("timed out"));
+        when(peers.fetch("http://node-b:8080", 1)).thenThrow(new RestClientException("timed out"));
         when(repository.findById(1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
 
         assertThat(service(Mode.DISTRIBUTED).get(1)).isPresent();
@@ -171,7 +170,7 @@ class ItemServiceTest {
         when(repository.findById(1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
 
         assertThat(service(Mode.DISTRIBUTED).getAsOwner(1)).isPresent();
-        verify(owners, never()).fetch(any(), any(Long.class));
+        verify(peers, never()).fetch(any(), any(Long.class));
     }
 
     // Fails until SingleFlight is written (milestone 3).
@@ -196,5 +195,25 @@ class ItemServiceTest {
         }
 
         verify(repository, times(1)).findById(1);
+    }
+
+    @Test
+    void distributedUpdateInvalidatesEveryPeerWithTheNewVersion() {
+        when(cluster.peerUrls()).thenReturn(List.of("http://node-b:8080", "http://node-c:8080"));
+        when(repository.update(1, new ItemUpdate("new", 1, 1))).thenReturn(Optional.of(ItemControllerTest.item(1)));
+
+        service(Mode.DISTRIBUTED).update(1, new ItemUpdate("new", 1, 1));
+
+        verify(peers).invalidate("http://node-b:8080", 1, 3);
+        verify(peers).invalidate("http://node-c:8080", 1, 3);
+    }
+
+    @Test
+    void unreachablePeerDoesNotFailTheWrite() {
+        when(cluster.peerUrls()).thenReturn(List.of("http://node-b:8080"));
+        when(repository.update(1, new ItemUpdate("new", 1, 1))).thenReturn(Optional.of(ItemControllerTest.item(1)));
+        org.mockito.Mockito.doThrow(new RestClientException("refused")).when(peers).invalidate(any(), any(Long.class), any(Long.class));
+
+        assertThat(service(Mode.DISTRIBUTED).update(1, new ItemUpdate("new", 1, 1))).isPresent();
     }
 }
