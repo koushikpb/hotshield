@@ -18,9 +18,13 @@ services:
 
   # Three nodes behind nginx, standing in for ECS tasks behind the ALB. Started only with
   # `docker compose --profile cluster up -d --build`, so plain `docker compose up -d` stays Postgres-only.
+  # Each node is also published directly (8081-8083) so per-node counters can be polled; through nginx every
+  # sample would come from a different node.
   node-a: &node
     profiles: [cluster]
     build: .
+    ports:
+      - "8081:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -36,11 +40,15 @@ services:
     environment:
       <<: *node-env
       NODE_ID: node-b
+    ports:
+      - "8082:8080"
   node-c:
     <<: *node
     environment:
       <<: *node-env
       NODE_ID: node-c
+    ports:
+      - "8083:8080"
 
   lb:
     profiles: [cluster]
