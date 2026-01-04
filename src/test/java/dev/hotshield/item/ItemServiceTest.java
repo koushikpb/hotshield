@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.web.client.RestClientException;
 import org.junit.jupiter.api.Test;
@@ -38,7 +39,7 @@ class ItemServiceTest {
     }
 
     ItemService service(Mode mode) {
-        return new ItemService(repository, cache, properties(mode), cluster, peers, TransactionOperations.withoutTransaction());
+        return new ItemService(repository, cache, properties(mode), cluster, peers, TransactionOperations.withoutTransaction(), new SimpleMeterRegistry());
     }
 
     @Test
@@ -106,7 +107,7 @@ class ItemServiceTest {
         var properties = properties(Mode.CACHE);
         var meteredCache = new ItemCacheConfig().itemCache(properties, registry);
         when(repository.findById(1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
-        var service = new ItemService(repository, meteredCache, properties, cluster, peers, TransactionOperations.withoutTransaction());
+        var service = new ItemService(repository, meteredCache, properties, cluster, peers, TransactionOperations.withoutTransaction(), registry);
 
         service.get(1);
         service.get(1);
@@ -119,11 +120,11 @@ class ItemServiceTest {
     void dbDelayRunsTheReadInsideATransaction() {
         var transactions = mock(TransactionOperations.class);
         when(transactions.execute(any())).thenAnswer(invocation ->
-                invocation.<org.springframework.transaction.support.TransactionCallback<?>>getArgument(0).doInTransaction(null));
+                invocation.<org.springframework.transaction.support.TransactionCallback<?>>getArgument(0).doInTransaction(new org.springframework.transaction.support.SimpleTransactionStatus()));
         when(repository.findById(1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
         var properties = new HotShieldProperties(Mode.DIRECT, "node-a", List.of(), Duration.ofMillis(500),
                 Duration.ofMillis(20), new HotShieldProperties.Cache(100, Duration.ofMinutes(1), Duration.ofSeconds(10)));
-        var service = new ItemService(repository, cache, properties, cluster, peers, transactions);
+        var service = new ItemService(repository, cache, properties, cluster, peers, transactions, new SimpleMeterRegistry());
 
         assertThat(service.get(1)).isPresent();
         verify(transactions).execute(any());
@@ -163,6 +164,36 @@ class ItemServiceTest {
 
         assertThat(service(Mode.DISTRIBUTED).get(1)).isPresent();
         verify(repository).findById(1);
+    }
+
+    // Membership disagreement: this node forwards id 1 to node-b while node-b forwards id 1 here. The incoming
+    // owner request must not wait on the outgoing forward.
+    @Test
+    void ownerRequestDoesNotWaitOnThisNodesOwnForward() throws Exception {
+        when(cluster.ownerOf(1)).thenReturn("node-b");
+        when(cluster.baseUrl("node-b")).thenReturn("http://node-b:8080");
+        var forwardStarted = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        when(peers.fetch("http://node-b:8080", 1)).thenAnswer(invocation -> {
+            forwardStarted.countDown();
+            release.await();
+            return Optional.of(ItemControllerTest.item(1));
+        });
+        when(repository.findById(1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
+        var service = service(Mode.DISTRIBUTED);
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            executor.submit(() -> service.get(1));
+            try {
+                assertThat(forwardStarted.await(2, TimeUnit.SECONDS)).isTrue();
+
+                var owner = executor.submit(() -> service.getAsOwner(1));
+
+                assertThat(owner.get(2, TimeUnit.SECONDS)).isPresent();
+            } finally {
+                release.countDown();
+            }
+        }
     }
 
     @Test

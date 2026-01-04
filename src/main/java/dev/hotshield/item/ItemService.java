@@ -4,6 +4,8 @@ import dev.hotshield.HotShieldProperties;
 import dev.hotshield.cluster.Cluster;
 import dev.hotshield.cluster.PeerClient;
 import dev.hotshield.coalesce.SingleFlight;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -31,7 +33,13 @@ public class ItemService {
     private final TransactionOperations transactions;
     private final Duration dbDelay;
     private final Duration forwardTimeout;
-    private final SingleFlight<Long, Optional<Item>> misses = new SingleFlight<>();
+    // Two instances on purpose. If two nodes each think the other owns a key, each forwards it; with one shared
+    // instance the incoming /internal request would join the node's own outgoing forward and both would wait
+    // on each other until the forward timeout.
+    private final SingleFlight<Long, Optional<Item>> loads = new SingleFlight<>();
+    private final SingleFlight<Long, Optional<Item>> forwards = new SingleFlight<>();
+    private final Counter forwardOk;
+    private final Counter forwardFallback;
 
     public ItemService(
             ItemRepository repository,
@@ -39,7 +47,8 @@ public class ItemService {
             HotShieldProperties properties,
             Cluster cluster,
             PeerClient peers,
-            TransactionOperations transactions) {
+            TransactionOperations transactions,
+            MeterRegistry registry) {
         this.repository = repository;
         this.cache = cache;
         this.mode = properties.mode();
@@ -48,6 +57,9 @@ public class ItemService {
         this.transactions = transactions;
         this.dbDelay = properties.dbDelay();
         this.forwardTimeout = properties.forwardTimeout();
+        // Separates owner reads from fallback reads, which db.queries alone can't.
+        this.forwardOk = Counter.builder("owner.forwards").tag("result", "ok").register(registry);
+        this.forwardFallback = Counter.builder("owner.forwards").tag("result", "fallback").register(registry);
     }
 
     public Optional<Item> get(long id) {
@@ -83,7 +95,7 @@ public class ItemService {
         if (cached != null) {
             return Optional.of(cached);
         }
-        return misses.run(id, () -> {
+        return loads.run(id, () -> {
             Optional<Item> loaded = readDb(id);
             loaded.ifPresent(cache::put);
             return loaded;
@@ -101,7 +113,7 @@ public class ItemService {
         if (cached != null) {
             return Optional.of(cached);
         }
-        return misses.run(id, () -> {
+        return forwards.run(id, () -> {
             Optional<Item> loaded = fetchFromOwner(owner, id);
             loaded.ifPresent(cache::put);
             return loaded;
@@ -112,8 +124,11 @@ public class ItemService {
     // cross-node coalescing for that key until it recovers.
     private Optional<Item> fetchFromOwner(String owner, long id) {
         try {
-            return peers.fetch(cluster.baseUrl(owner), id);
+            Optional<Item> item = peers.fetch(cluster.baseUrl(owner), id);
+            forwardOk.increment();
+            return item;
         } catch (RestClientException e) {
+            forwardFallback.increment();
             log.warn("owner fetch failed, reading db owner={} key={} error={}", owner, id, e.getMessage());
             return readDb(id);
         }
@@ -127,6 +142,7 @@ public class ItemService {
             return repository.findById(id);
         }
         return transactions.execute(status -> {
+            status.setRollbackOnly();
             sleep(dbDelay);
             return repository.findById(id);
         });
