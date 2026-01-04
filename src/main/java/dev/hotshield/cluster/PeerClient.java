@@ -15,7 +15,12 @@ public class PeerClient {
     private final RestClient http;
 
     public PeerClient(RestClient.Builder builder, HotShieldProperties properties) {
-        var client = HttpClient.newBuilder().connectTimeout(properties.forwardTimeout()).build();
+        // HTTP/1.1 because the JDK client otherwise opens every connection with an h2c upgrade attempt.
+        // Connect and read are bounded separately, so the worst case is about twice forwardTimeout.
+        var client = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(properties.forwardTimeout())
+                .build();
         var requests = new JdkClientHttpRequestFactory(client);
         // Bounds the whole wait on the owner. Past this the caller falls back to the database, so a slow or
         // dead owner costs at most this much extra latency per miss.

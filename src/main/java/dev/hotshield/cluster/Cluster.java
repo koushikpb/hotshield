@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 
 // Static membership from PEERS ("node-a=http://node-a:8080,node-b=..."), self included. Every node must be
 // given the same list, or two nodes can disagree about who owns a key. With no PEERS this node is a cluster
-// of one and owns every key.
+// of one and owns every key; a non-empty PEERS that leaves out this node is a config error.
 @Component
 public class Cluster {
 
@@ -19,7 +19,11 @@ public class Cluster {
     public Cluster(HotShieldProperties properties) {
         this.self = properties.nodeId();
         var urls = parse(properties.peers());
-        urls.putIfAbsent(self, "");
+        if (urls.isEmpty()) {
+            urls.put(self, "");
+        } else if (!urls.containsKey(self)) {
+            throw new IllegalArgumentException("PEERS must include this node: " + self);
+        }
         this.baseUrls = urls;
         this.hash = new RendezvousHash(List.copyOf(baseUrls.keySet()));
     }
