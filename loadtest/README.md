@@ -15,6 +15,7 @@ iteration, because at that point it has stopped being open loop.
 - `lib.js` — shared options, seeded random draws, Zipf sampler
 - `baseline.js` — the milestone 1 script, kept so earlier runs stay reproducible
 - `poll-metrics.sh` — samples the `findById` query counter once a second (for herd runs)
+- `staleness.js` — concurrent writes plus reads on a small hot set; reports how long reads keep returning an older version after a PUT returns (milestone 6)
 
 ## Running
 
@@ -53,7 +54,10 @@ The Prometheus default 15s scrape is too coarse to see a spike that lasts under 
 `poll-metrics.sh` alongside k6 and read the per-second deltas of the count (it needs `python3`):
 
 ```
-BASE_URL=http://localhost:8080 loadtest/poll-metrics.sh > /tmp/k6/herd-queries.csv &
+# single node:
+loadtest/poll-metrics.sh > /tmp/k6/herd-queries.csv &
+# compose cluster: each node directly, summed (nginx would hand each sample to a different node)
+NODE_URLS="http://localhost:8081 http://localhost:8082 http://localhost:8083" loadtest/poll-metrics.sh > /tmp/k6/herd-queries.csv &
 # ... k6 run herd.js ...
 kill %1
 ```
@@ -97,3 +101,10 @@ kill %1
   request at 1M ids.
 
 Log every run in `docs/EXPERIMENTS.md`.
+
+## Staleness (milestone 6)
+
+`staleness.js` times staleness from when the PUT *returns*, not from the commit, because k6 can't see the
+commit. The PUT returns only after the invalidation broadcast finishes or times out, so this number is a
+lower bound on commit-to-fresh time. Run it with `HOTSHIELD_CACHE_TTL=10m`, so the TTL cannot hide a lost
+invalidation, and record `stale_reads`, `poll_reads`, and the `staleness_ms` percentiles.
