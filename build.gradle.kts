@@ -1,3 +1,5 @@
+import java.time.Duration
+
 plugins {
     java
     id("org.springframework.boot") version "3.5.16"
@@ -41,4 +43,10 @@ tasks.withType<Test> {
 // A fixed name so the Dockerfile doesn't need a glob that breaks on a version bump.
 tasks.bootJar {
     archiveFileName = "app.jar"
+}
+
+// A SingleFlight that runs the loader under a monitor or inside computeIfAbsent can pin every carrier thread
+// and hang the whole test JVM, which no per-test timeout can interrupt. This turns that hang into a failure.
+tasks.test {
+    timeout = Duration.ofMinutes(3)
 }
