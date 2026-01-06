@@ -23,6 +23,12 @@ public final class ItemCache {
         return items.getIfPresent(id);
     }
 
+    // The version a fresh read must reach for this id; 0 when nothing was invalidated recently.
+    public long floor(long id) {
+        Long floor = tombstones.getIfPresent(id);
+        return floor == null ? 0 : floor;
+    }
+
     public void put(Item item) {
         items.asMap().compute(item.id(), (id, current) -> {
             Long floor = tombstones.getIfPresent(id);

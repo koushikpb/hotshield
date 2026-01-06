@@ -36,8 +36,8 @@ public class ItemService {
     // Two instances on purpose. If two nodes each think the other owns a key, each forwards it; with one shared
     // instance the incoming /internal request would join the node's own outgoing forward and both would wait
     // on each other until the forward timeout.
-    private final SingleFlight<Long, Optional<Item>> loads = new SingleFlight<>();
-    private final SingleFlight<Long, Optional<Item>> forwards = new SingleFlight<>();
+    private final SingleFlight<FlightKey, Optional<Item>> loads = new SingleFlight<>();
+    private final SingleFlight<FlightKey, Optional<Item>> forwards = new SingleFlight<>();
     private final Counter forwardOk;
     private final Counter forwardFallback;
 
@@ -95,12 +95,26 @@ public class ItemService {
         if (cached != null) {
             return Optional.of(cached);
         }
-        return loads.run(id, () -> {
+        return loads.run(flightKey(id), () -> {
+            // Another flight may have filled the cache between our miss and starting this one.
+            Item filled = cache.get(id);
+            if (filled != null) {
+                return Optional.of(filled);
+            }
             Optional<Item> loaded = readDb(id);
             loaded.ifPresent(cache::put);
             return loaded;
         });
     }
+
+    // A flight that started before a write can finish with the old row. Keying flights by the invalidation floor
+    // means a read that arrives after the write starts a new flight instead of joining the old one, so a writer
+    // always reads its own write.
+    private FlightKey flightKey(long id) {
+        return new FlightKey(id, cache.floor(id));
+    }
+
+    private record FlightKey(long id, long floor) {}
 
     // Non-owners keep their own copy and forward only misses. Forwards for one id are coalesced here too,
     // so a hot key costs each non-owner one forward per miss, not one per request.
@@ -113,7 +127,11 @@ public class ItemService {
         if (cached != null) {
             return Optional.of(cached);
         }
-        return forwards.run(id, () -> {
+        return forwards.run(flightKey(id), () -> {
+            Item filled = cache.get(id);
+            if (filled != null) {
+                return Optional.of(filled);
+            }
             Optional<Item> loaded = fetchFromOwner(owner, id);
             loaded.ifPresent(cache::put);
             return loaded;

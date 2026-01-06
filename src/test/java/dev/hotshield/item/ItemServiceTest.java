@@ -209,23 +209,57 @@ class ItemServiceTest {
     void coalesceModeSharesOneReadAcrossConcurrentMisses() throws Exception {
         int callers = 1_000;
         var allStarted = new CountDownLatch(callers);
+        var item = ItemControllerTest.item(1);
         when(repository.findById(1)).thenAnswer(invocation -> {
             allStarted.await();
             Thread.sleep(200);
-            return Optional.of(ItemControllerTest.item(1));
+            return Optional.of(item);
         });
         var service = service(Mode.COALESCE);
 
+        var results = new java.util.ArrayList<java.util.concurrent.Future<Optional<Item>>>();
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             for (int i = 0; i < callers; i++) {
-                executor.submit(() -> {
+                results.add(executor.submit(() -> {
                     allStarted.countDown();
                     return service.get(1);
-                });
+                }));
             }
         }
 
         verify(repository, times(1)).findById(1);
+        for (var result : results) {
+            assertThat(result.get()).contains(item);
+        }
+    }
+
+    // Missing ids aren't cached, so each new wave of misses for an absent id still costs one read.
+    @Test
+    void coalesceModeSharesOneReadForAnAbsentId() throws Exception {
+        int callers = 1_000;
+        var allStarted = new CountDownLatch(callers);
+        when(repository.findById(999)).thenAnswer(invocation -> {
+            allStarted.await();
+            Thread.sleep(200);
+            return Optional.empty();
+        });
+        var service = service(Mode.COALESCE);
+
+        var results = new java.util.ArrayList<java.util.concurrent.Future<Optional<Item>>>();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (int i = 0; i < callers; i++) {
+                results.add(executor.submit(() -> {
+                    allStarted.countDown();
+                    return service.get(999);
+                }));
+            }
+        }
+
+        verify(repository, times(1)).findById(999);
+        for (var result : results) {
+            assertThat(result.get()).isEmpty();
+        }
+        assertThat(cache.get(999)).isNull();
     }
 
     @Test
