@@ -27,6 +27,8 @@ dependencies {
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("com.github.ben-manes.caffeine:caffeine")
     implementation("io.micrometer:micrometer-registry-prometheus")
+    // Annotations only; the Java agent does the tracing at runtime and ignores them when it is not attached.
+    implementation("io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations:2.32.0")
     runtimeOnly("org.postgresql:postgresql")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")

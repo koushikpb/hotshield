@@ -35,11 +35,21 @@ services:
       HOTSHIELD_CACHE_TTL: ${HOTSHIELD_CACHE_TTL:-30s}
       HOTSHIELD_DB_DELAY: ${HOTSHIELD_DB_DELAY:-0ms}
       DB_URL: jdbc:postgresql://postgres:5432/hotshield
+      # Tracing is opt-in: TRACING=-javaagent:/app/opentelemetry-javaagent.jar docker compose --profile cluster up
+      # Leave it unset for benchmark runs so the numbers don't include agent overhead.
+      JAVA_TOOL_OPTIONS: ${TRACING:-}
+      OTEL_SERVICE_NAME: hotshield
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=node-a
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
   node-b:
     <<: *node
     environment:
       <<: *node-env
       NODE_ID: node-b
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=node-b
     ports:
       - "8082:8080"
   node-c:
@@ -47,8 +57,15 @@ services:
     environment:
       <<: *node-env
       NODE_ID: node-c
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=node-c
     ports:
       - "8083:8080"
+
+  jaeger:
+    profiles: [cluster]
+    image: jaegertracing/all-in-one:1.62.0
+    ports:
+      - "16686:16686"
 
   lb:
     profiles: [cluster]

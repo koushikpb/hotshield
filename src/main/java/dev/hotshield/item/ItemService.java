@@ -6,6 +6,8 @@ import dev.hotshield.cluster.PeerClient;
 import dev.hotshield.coalesce.SingleFlight;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.opentelemetry.instrumentation.annotations.SpanAttribute;
+import io.opentelemetry.instrumentation.annotations.WithSpan;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -95,6 +97,11 @@ public class ItemService {
         if (cached != null) {
             return Optional.of(cached);
         }
+        return loadOnce(id);
+    }
+
+    @WithSpan("singleflight.load")
+    Optional<Item> loadOnce(@SpanAttribute("item.id") long id) {
         return loads.run(flightKey(id), () -> {
             // Another flight may have filled the cache between our miss and starting this one.
             Item filled = cache.get(id);
@@ -127,6 +134,11 @@ public class ItemService {
         if (cached != null) {
             return Optional.of(cached);
         }
+        return forwardOnce(owner, id);
+    }
+
+    @WithSpan("singleflight.forward")
+    Optional<Item> forwardOnce(@SpanAttribute("owner") String owner, @SpanAttribute("item.id") long id) {
         return forwards.run(flightKey(id), () -> {
             Item filled = cache.get(id);
             if (filled != null) {
@@ -140,7 +152,8 @@ public class ItemService {
 
     // Falling back to the database keeps reads available when the owner is down, at the cost of losing
     // cross-node coalescing for that key until it recovers.
-    private Optional<Item> fetchFromOwner(String owner, long id) {
+    @WithSpan("owner.forward")
+    Optional<Item> fetchFromOwner(@SpanAttribute("owner") String owner, @SpanAttribute("item.id") long id) {
         try {
             Optional<Item> item = peers.fetch(cluster.baseUrl(owner), id);
             forwardOk.increment();
@@ -155,7 +168,8 @@ public class ItemService {
     // A local findById takes about a millisecond, which leaves almost no window for concurrent misses to
     // pile up, so the herd experiment can add a delay. It sleeps inside a transaction so the pooled connection
     // stays checked out, like a slow query would; a sleep outside it wouldn't touch the pool at all.
-    private Optional<Item> readDb(long id) {
+    @WithSpan("db.read")
+    Optional<Item> readDb(@SpanAttribute("item.id") long id) {
         if (dbDelay.isZero()) {
             return repository.findById(id);
         }

@@ -1,6 +1,8 @@
 package dev.hotshield.item;
 
 import com.github.benmanes.caffeine.cache.Cache;
+import io.opentelemetry.instrumentation.annotations.SpanAttribute;
+import io.opentelemetry.instrumentation.annotations.WithSpan;
 
 // The item cache plus short-lived tombstones that close the stale-put race: a miss reads v1, a write commits v2
 // and invalidates, then the miss tries to cache v1. The tombstone remembers v2 long enough to refuse that put.
@@ -19,7 +21,8 @@ public final class ItemCache {
         this.tombstones = tombstones;
     }
 
-    public Item get(long id) {
+    @WithSpan("cache.lookup")
+    public Item get(@SpanAttribute("item.id") long id) {
         return items.getIfPresent(id);
     }
 

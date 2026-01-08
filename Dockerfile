@@ -11,6 +11,11 @@ RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon bootJar -x tes
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app
+# Pinned by checksum so a rebuild can't silently pick up a different agent. Attached only when JAVA_TOOL_OPTIONS
+# names it (see docker-compose.yml), so benchmark runs measure the app without tracing overhead.
+ADD --chmod=644 --checksum=sha256:f787eb6c7f3d18e69a431e108a15278d25ee37f83d68b678f621e063f3988f82 \
+    https://repo1.maven.org/maven2/io/opentelemetry/javaagent/opentelemetry-javaagent/2.32.0/opentelemetry-javaagent-2.32.0.jar \
+    /app/opentelemetry-javaagent.jar
 RUN useradd --system --uid 10001 hotshield
 COPY --from=build /src/build/libs/app.jar app.jar
 USER hotshield
