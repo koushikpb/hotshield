@@ -12,11 +12,16 @@ import { Counter, Trend } from 'k6/metrics';
 import { BASE_URL, READ_TAGS, WRITE_TAGS, buildOptions, seconds, uniform01 } from './lib.js';
 
 const HOT_KEYS = Number(__ENV.HOT_KEYS || 50);
+// Writers use a smaller set so concurrent writes to the same key actually happen.
+const WRITE_KEYS = Number(__ENV.WRITE_KEYS || 5);
 const WRITE_RATE = Number(__ENV.WRITE_RATE || 5);
 const WINDOW = __ENV.WINDOW || '1s';
 const POLL_MS = Number(__ENV.POLL_MS || 5);
 
+// Two bounds on commit-to-fresh time: k6 can't see the commit, which happens somewhere between sending the
+// PUT and getting its response.
 const staleness = new Trend('staleness_ms', true);
+const stalenessFromSent = new Trend('staleness_from_sent_ms', true);
 const staleReads = new Counter('stale_reads');
 const pollReads = new Counter('poll_reads');
 
@@ -38,6 +43,7 @@ export const options = buildOptions({
   },
 }, {
   'staleness_ms': ['p(99)>=0'],
+  'staleness_from_sent_ms': ['p(99)>=0'],
 });
 
 export default function () {
@@ -46,8 +52,9 @@ export default function () {
 }
 
 export function write() {
-  const id = hotId(1);
+  const id = 1 + Math.floor(uniform01(1) * WRITE_KEYS);
   const body = JSON.stringify({ name: `item ${id}`, priceCents: 1000 + Math.floor(uniform01(2) * 9000), stock: 10 });
+  const sentAt = Date.now();
   const put = http.put(`${BASE_URL}/items/${id}`, body, WRITE_TAGS);
   if (!check(put, { 'put 200': (r) => r.status === 200 })) {
     return;
@@ -68,4 +75,5 @@ export function write() {
   // Zero when every poll was fresh. Bounded below by POLL_MS resolution and above by WINDOW: a value near
   // WINDOW means the copy stayed stale for the whole window (likely a lost invalidation).
   staleness.add(lastStaleAt === null ? 0 : lastStaleAt - returnedAt);
+  stalenessFromSent.add(lastStaleAt === null ? returnedAt - sentAt : lastStaleAt - sentAt);
 }

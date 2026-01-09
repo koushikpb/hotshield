@@ -104,7 +104,10 @@ Log every run in `docs/EXPERIMENTS.md`.
 
 ## Staleness (milestone 6)
 
-`staleness.js` times staleness from when the PUT *returns*, not from the commit, because k6 can't see the
-commit. The PUT returns only after the invalidation broadcast finishes or times out, so this number is a
-lower bound on commit-to-fresh time. Run it with `HOTSHIELD_CACHE_TTL=10m`, so the TTL cannot hide a lost
+`staleness.js` can't see the commit, so it reports two bounds: `staleness_ms` from when the PUT returned
+and `staleness_from_sent_ms` from when it was sent. The PUT returns only after the invalidation broadcast
+finishes or times out, so in a healthy run `staleness_ms` is about 0 by construction. The interesting run is
+the fault pass: `docker pause hotshield-node-b-1` for a few seconds mid-run, then `docker unpause`, so
+invalidations to node-b are lost. The pollers add about `WRITE_RATE * 1000 / POLL_MS` req/s on top of
+`RATE`; report it with the run. Run it with `HOTSHIELD_CACHE_TTL=10m`, so the TTL cannot hide a lost
 invalidation, and record `stale_reads`, `poll_reads`, and the `staleness_ms` percentiles.
