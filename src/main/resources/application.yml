@@ -8,6 +8,9 @@ spring:
     hikari:
       maximum-pool-size: ${DB_POOL_SIZE:10}
       connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:2000}
+      data-source-properties:
+        # Bounds every query, so the slowest read path (and the tombstone TTL derived from it) has an upper limit.
+        options: -c statement_timeout=${hotshield.db-statement-timeout}
   jackson:
     deserialization:
       # A PUT missing priceCents or stock would otherwise write 0 for them.
@@ -23,10 +26,11 @@ hotshield:
   peers: ${PEERS:}                  # id=url pairs, self included: node-a=http://node-a:8080,node-b=...
   forward-timeout: ${FORWARD_TIMEOUT:500ms}
   db-delay: ${HOTSHIELD_DB_DELAY:0ms}      # herd runs only, see loadtest/README.md
+  db-statement-timeout: ${DB_STATEMENT_TIMEOUT:2s}
   cache:
     max-size: ${HOTSHIELD_CACHE_MAX_SIZE:100000}
     ttl: ${HOTSHIELD_CACHE_TTL:30s}
-    tombstone-ttl: 10s
+    tombstone-ttl: ${HOTSHIELD_TOMBSTONE_TTL:10s}
 
 management:
   endpoints:

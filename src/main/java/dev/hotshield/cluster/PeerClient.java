@@ -16,7 +16,7 @@ public class PeerClient {
 
     public PeerClient(RestClient.Builder builder, HotShieldProperties properties) {
         // HTTP/1.1 because the JDK client otherwise opens every connection with an h2c upgrade attempt.
-        // Connect and read are bounded separately, so the worst case is about twice forwardTimeout.
+        // Connect and read are bounded separately; ItemCacheConfig counts both when sizing tombstones.
         var client = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(properties.forwardTimeout())

@@ -11,16 +11,16 @@ import io.opentelemetry.instrumentation.annotations.WithSpan;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.ExecutionException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.web.client.RestClientException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.web.client.RestClientException;
 
 @Service
 public class ItemService {
@@ -145,9 +145,26 @@ public class ItemService {
                 return Optional.of(filled);
             }
             Optional<Item> loaded = fetchFromOwner(owner, id);
-            loaded.ifPresent(cache::put);
-            return loaded;
+            if (loaded.isEmpty() || cache.put(loaded.get())) {
+                return loaded;
+            }
+            return repairStaleOwner(owner, id);
         });
+    }
+
+    // The owner sent a version older than our tombstone, so it missed an invalidation. Without this every miss
+    // here would keep forwarding and returning that old row until our tombstone expired, and then cache it.
+    // Read the database instead, and send the owner the invalidation it missed.
+    private Optional<Item> repairStaleOwner(String owner, long id) {
+        long floor = cache.floor(id);
+        try {
+            peers.invalidate(cluster.baseUrl(owner), id, floor);
+        } catch (RestClientException e) {
+            log.warn("owner repair failed owner={} key={} error={}", owner, id, e.getMessage());
+        }
+        Optional<Item> fresh = readDb(id);
+        fresh.ifPresent(cache::put);
+        return fresh;
     }
 
     // Falling back to the database keeps reads available when the owner is down, at the cost of losing
@@ -199,7 +216,8 @@ public class ItemService {
             invalidateEverywhere(id, ItemCache.UNKNOWN_VERSION);
             throw e;
         }
-        invalidateEverywhere(id, updated.map(Item::version).orElse(ItemCache.UNKNOWN_VERSION));
+        // Nothing can be cached for an id that doesn't exist, so a 404 PUT has nothing to invalidate.
+        updated.ifPresent(item -> invalidateEverywhere(id, item.version()));
         return updated;
     }
 
@@ -221,12 +239,16 @@ public class ItemService {
                     .toList();
             long deadline = System.nanoTime() + forwardTimeout.toNanos();
             for (Future<?> send : sent) {
-                awaitInvalidation(send, deadline, id);
+                if (!awaitInvalidation(send, deadline, id)) {
+                    sent.forEach(other -> other.cancel(true));
+                    return;
+                }
             }
         }
     }
 
-    private static void awaitInvalidation(Future<?> send, long deadline, long id) {
+    // Returns false only when this thread was interrupted, so the caller stops waiting on the rest.
+    private static boolean awaitInvalidation(Future<?> send, long deadline, long id) {
         try {
             send.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
         } catch (ExecutionException | TimeoutException e) {
@@ -234,7 +256,9 @@ public class ItemService {
             log.warn("invalidate broadcast failed key={} error={}", id, e.toString());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            return false;
         }
+        return true;
     }
 
     public List<Item> findByCategory(String category, int minPriceCents, int limit) {

@@ -3,6 +3,7 @@ package dev.hotshield.item;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -16,11 +17,15 @@ import dev.hotshield.cluster.Cluster;
 import dev.hotshield.cluster.PeerClient;
 import dev.hotshield.HotShieldProperties.Mode;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.web.client.RestClientException;
 import org.junit.jupiter.api.Test;
@@ -28,7 +33,7 @@ import org.junit.jupiter.api.Test;
 class ItemServiceTest {
 
     ItemRepository repository = mock(ItemRepository.class);
-    ItemCache cache = new ItemCache(Caffeine.newBuilder().build(), Caffeine.newBuilder().build());
+    ItemCache cache = new ItemCache(Caffeine.newBuilder().maximumSize(100).build(), Caffeine.newBuilder().maximumSize(100).build());
 
     Cluster cluster = mock(Cluster.class);
     PeerClient peers = mock(PeerClient.class);
@@ -120,7 +125,7 @@ class ItemServiceTest {
     void dbDelayRunsTheReadInsideATransaction() {
         var transactions = mock(TransactionOperations.class);
         when(transactions.execute(any())).thenAnswer(invocation ->
-                invocation.<org.springframework.transaction.support.TransactionCallback<?>>getArgument(0).doInTransaction(new org.springframework.transaction.support.SimpleTransactionStatus()));
+                invocation.<TransactionCallback<?>>getArgument(0).doInTransaction(new SimpleTransactionStatus()));
         when(repository.findById(1)).thenReturn(Optional.of(ItemControllerTest.item(1)));
         var properties = new HotShieldProperties(Mode.DIRECT, "node-a", List.of(), Duration.ofMillis(500),
                 Duration.ofMillis(20), new HotShieldProperties.Cache(100, Duration.ofMinutes(1), Duration.ofSeconds(10)));
@@ -217,7 +222,7 @@ class ItemServiceTest {
         });
         var service = service(Mode.COALESCE);
 
-        var results = new java.util.ArrayList<java.util.concurrent.Future<Optional<Item>>>();
+        var results = new ArrayList<Future<Optional<Item>>>();
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             for (int i = 0; i < callers; i++) {
                 results.add(executor.submit(() -> {
@@ -245,7 +250,7 @@ class ItemServiceTest {
         });
         var service = service(Mode.COALESCE);
 
-        var results = new java.util.ArrayList<java.util.concurrent.Future<Optional<Item>>>();
+        var results = new ArrayList<Future<Optional<Item>>>();
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             for (int i = 0; i < callers; i++) {
                 results.add(executor.submit(() -> {
@@ -277,8 +282,35 @@ class ItemServiceTest {
     void unreachablePeerDoesNotFailTheWrite() {
         when(cluster.peerUrls()).thenReturn(List.of("http://node-b:8080"));
         when(repository.update(1, new ItemUpdate("new", 1, 1))).thenReturn(Optional.of(ItemControllerTest.item(1)));
-        org.mockito.Mockito.doThrow(new RestClientException("refused")).when(peers).invalidate(any(), any(Long.class), any(Long.class));
+        doThrow(new RestClientException("refused")).when(peers).invalidate(any(), any(Long.class), any(Long.class));
 
         assertThat(service(Mode.DISTRIBUTED).update(1, new ItemUpdate("new", 1, 1))).isPresent();
+    }
+
+    @Test
+    void updateOfMissingIdBroadcastsNothing() {
+        when(cluster.peerUrls()).thenReturn(List.of("http://node-b:8080"));
+        when(repository.update(999, new ItemUpdate("new", 1, 1))).thenReturn(Optional.empty());
+
+        service(Mode.DISTRIBUTED).update(999, new ItemUpdate("new", 1, 1));
+
+        verify(peers, never()).invalidate(any(), any(Long.class), any(Long.class));
+    }
+
+    // The owner missed the invalidation for version 5 and still serves version 3. This node must not return or
+    // cache version 3, and must tell the owner what it missed. Goes through SingleFlight, so fails until it exists.
+    @Test
+    void staleOwnerResultIsReplacedByADatabaseReadAndTheOwnerIsRepaired() {
+        when(cluster.ownerOf(1)).thenReturn("node-b");
+        when(cluster.baseUrl("node-b")).thenReturn("http://node-b:8080");
+        cache.invalidate(1, 5);
+        when(peers.fetch("http://node-b:8080", 1)).thenReturn(Optional.of(ItemCacheTest.item(1, 3)));
+        when(repository.findById(1)).thenReturn(Optional.of(ItemCacheTest.item(1, 5)));
+
+        var result = service(Mode.DISTRIBUTED).get(1);
+
+        assertThat(result.orElseThrow().version()).isEqualTo(5);
+        assertThat(cache.get(1).version()).isEqualTo(5);
+        verify(peers).invalidate("http://node-b:8080", 1, 5);
     }
 }

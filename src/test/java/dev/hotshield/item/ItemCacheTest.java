@@ -3,7 +3,10 @@ package dev.hotshield.item;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.Ticker;
+import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import org.junit.jupiter.api.RepeatedTest;
@@ -11,15 +14,28 @@ import org.junit.jupiter.api.Test;
 
 class ItemCacheTest {
 
-    ItemCache cache = new ItemCache(Caffeine.newBuilder().build(), Caffeine.newBuilder().build());
+    AtomicLong nanos = new AtomicLong();
+    Ticker ticker = nanos::get;
+    // Bounded and expiring like the real ones: Caffeine uses a different implementation for unbounded caches.
+    ItemCache cache = new ItemCache(
+            Caffeine.newBuilder().maximumSize(100).expireAfterWrite(Duration.ofMinutes(1)).ticker(ticker).build(),
+            Caffeine.newBuilder().expireAfterWrite(Duration.ofSeconds(10)).ticker(ticker).build());
 
     @Test
     void staleReadAfterInvalidateIsRefused() {
         cache.invalidate(1, 2);
 
-        cache.put(item(1, 1));
-
+        assertThat(cache.put(item(1, 1))).isFalse();
         assertThat(cache.get(1)).isNull();
+    }
+
+    @Test
+    void tombstoneStopsRefusingOnceItExpires() {
+        cache.invalidate(1, 2);
+        nanos.addAndGet(Duration.ofSeconds(11).toNanos());
+
+        assertThat(cache.put(item(1, 1))).isTrue();
+        assertThat(cache.floor(1)).isZero();
     }
 
     @Test
@@ -35,7 +51,7 @@ class ItemCacheTest {
     void olderVersionDoesNotReplaceNewer() {
         cache.put(item(1, 3));
 
-        cache.put(item(1, 2));
+        assertThat(cache.put(item(1, 2))).isTrue();
 
         assertThat(cache.get(1).version()).isEqualTo(3);
     }
