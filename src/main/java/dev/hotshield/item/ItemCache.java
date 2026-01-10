@@ -1,6 +1,7 @@
 package dev.hotshield.item;
 
 import com.github.benmanes.caffeine.cache.Cache;
+import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.instrumentation.annotations.SpanAttribute;
 import io.opentelemetry.instrumentation.annotations.WithSpan;
 
@@ -24,7 +25,9 @@ public final class ItemCache {
 
     @WithSpan("cache.lookup")
     public Item get(@SpanAttribute("item.id") long id) {
-        return items.getIfPresent(id);
+        Item item = items.getIfPresent(id);
+        Span.current().setAttribute("hotshield.cache.hit", item != null);
+        return item;
     }
 
     // The version a fresh read must reach for this id; 0 when nothing was invalidated recently.

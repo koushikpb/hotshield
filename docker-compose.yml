@@ -39,6 +39,10 @@ services:
       # Leave it unset for benchmark runs so the numbers don't include agent overhead.
       JAVA_TOOL_OPTIONS: ${TRACING:-}
       OTEL_SERVICE_NAME: hotshield
+      # Parent-based so node-b and node-c follow node-a's sampling decision. Lower TRACE_RATIO under load:
+      # at 1.0 every k6 request is traced and the exporter queue drops spans without saying so.
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: ${TRACE_RATIO:-1.0}
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=node-a
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
@@ -64,6 +68,9 @@ services:
   jaeger:
     profiles: [cluster]
     image: jaegertracing/all-in-one:1.62.0
+    environment:
+      # The in-memory store is otherwise unbounded and grows for as long as a load run is traced.
+      MEMORY_MAX_TRACES: "50000"
     ports:
       - "16686:16686"
 

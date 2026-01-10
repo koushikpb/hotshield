@@ -27,8 +27,10 @@ dependencies {
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("com.github.ben-manes.caffeine:caffeine")
     implementation("io.micrometer:micrometer-registry-prometheus")
-    // Annotations only; the Java agent does the tracing at runtime and ignores them when it is not attached.
+    // Annotations only; the Java agent does the tracing at runtime. Boot pins opentelemetry-api lower than this
+    // jar asks for, which is fine: the agent brings its own API, and without it Span.current() is a no-op.
     implementation("io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations:2.32.0")
+    implementation("io.opentelemetry:opentelemetry-api")
     runtimeOnly("org.postgresql:postgresql")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")

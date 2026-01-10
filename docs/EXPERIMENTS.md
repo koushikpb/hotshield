@@ -9,7 +9,8 @@ One entry per run. Numbers come from real runs only.
 - Mode: direct | cache | coalesce | distributed
 - Environment: local docker / AWS (task size, RDS class)
 - Load: k6 scenario, arrival rate, duration, warmup, seed, key distribution
-- Config: DB pool size, cache max-size and ttl, node restarted before the run (cache.gets is cumulative)
+- Config: DB pool size, cache max-size and ttl, node restarted before the run (cache.gets is cumulative),
+  tracing on/off and TRACE_RATIO
 - Hypothesis (written before the run):
 
 | Metric | Value |

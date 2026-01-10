@@ -6,6 +6,7 @@ import dev.hotshield.cluster.PeerClient;
 import dev.hotshield.coalesce.SingleFlight;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.instrumentation.annotations.SpanAttribute;
 import io.opentelemetry.instrumentation.annotations.WithSpan;
 import java.time.Duration;
@@ -102,7 +103,9 @@ public class ItemService {
 
     @WithSpan("singleflight.load")
     Optional<Item> loadOnce(@SpanAttribute("item.id") long id) {
+        markRole("follower");
         return loads.run(flightKey(id), () -> {
+            markRole("leader");
             // Another flight may have filled the cache between our miss and starting this one.
             Item filled = cache.get(id);
             if (filled != null) {
@@ -123,6 +126,12 @@ public class ItemService {
 
     private record FlightKey(long id, long floor) {}
 
+    // Only the leader runs the loader, so it overwrites "follower". A follower's span has no db or forward child,
+    // and this attribute says why: it waited on the leader's trace instead.
+    private static void markRole(String role) {
+        Span.current().setAttribute("hotshield.singleflight.role", role);
+    }
+
     // Non-owners keep their own copy and forward only misses. Forwards for one id are coalesced here too,
     // so a hot key costs each non-owner one forward per miss, not one per request.
     private Optional<Item> getDistributed(long id) {
@@ -138,8 +147,10 @@ public class ItemService {
     }
 
     @WithSpan("singleflight.forward")
-    Optional<Item> forwardOnce(@SpanAttribute("owner") String owner, @SpanAttribute("item.id") long id) {
+    Optional<Item> forwardOnce(@SpanAttribute("hotshield.owner") String owner, @SpanAttribute("item.id") long id) {
+        markRole("follower");
         return forwards.run(flightKey(id), () -> {
+            markRole("leader");
             Item filled = cache.get(id);
             if (filled != null) {
                 return Optional.of(filled);
@@ -170,13 +181,14 @@ public class ItemService {
     // Falling back to the database keeps reads available when the owner is down, at the cost of losing
     // cross-node coalescing for that key until it recovers.
     @WithSpan("owner.forward")
-    Optional<Item> fetchFromOwner(@SpanAttribute("owner") String owner, @SpanAttribute("item.id") long id) {
+    Optional<Item> fetchFromOwner(@SpanAttribute("hotshield.owner") String owner, @SpanAttribute("item.id") long id) {
         try {
             Optional<Item> item = peers.fetch(cluster.baseUrl(owner), id);
             forwardOk.increment();
             return item;
         } catch (RestClientException e) {
             forwardFallback.increment();
+            Span.current().setAttribute("hotshield.forward.fallback", true);
             log.warn("owner fetch failed, reading db owner={} key={} error={}", owner, id, e.getMessage());
             return readDb(id);
         }
@@ -185,7 +197,7 @@ public class ItemService {
     // A local findById takes about a millisecond, which leaves almost no window for concurrent misses to
     // pile up, so the herd experiment can add a delay. It sleeps inside a transaction so the pooled connection
     // stays checked out, like a slow query would; a sleep outside it wouldn't touch the pool at all.
-    @WithSpan("db.read")
+    @WithSpan("item.read_db")
     Optional<Item> readDb(@SpanAttribute("item.id") long id) {
         if (dbDelay.isZero()) {
             return repository.findById(id);
