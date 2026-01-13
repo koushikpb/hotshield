@@ -37,3 +37,9 @@ management:
     web:
       exposure:
         include: health,metrics,prometheus
+  endpoint:
+    health:
+      # /actuator/health/liveness leaves the database out, so the load balancer doesn't pull nodes during a run
+      # that is meant to stress the database.
+      probes:
+        enabled: true
