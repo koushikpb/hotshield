@@ -9,10 +9,10 @@ variable "run" {
   default     = "dev"
 }
 
+# No default on purpose: an open ALB in front of a benchmark would let anyone add load to a run.
 variable "allowed_cidr" {
-  description = "Who may reach the ALB. Narrow this to your k6 instance or your own IP (x.x.x.x/32)."
+  description = "Who may reach the ALB. Use your own IP as x.x.x.x/32; the runner reaches the nodes directly."
   type        = string
-  default     = "0.0.0.0/0"
 }
 
 variable "hotshield_mode" {
@@ -37,9 +37,27 @@ variable "db_delay" {
   default     = "0ms"
 }
 
+# No default: the tag is the git SHA of the build (git rev-parse --short HEAD), so every run names its code.
+variable "tombstone_ttl" {
+  description = "Must exceed the slowest read path; the app refuses to start otherwise."
+  type        = string
+  default     = "10s"
+}
+
+variable "db_pool_size" {
+  description = "Hikari maximum-pool-size per node."
+  type        = number
+  default     = 10
+}
+
+variable "forward_timeout" {
+  description = "Connect and read timeout for a non-owner's call to the owner."
+  type        = string
+  default     = "500ms"
+}
+
 variable "image_tag" {
-  type    = string
-  default = "latest"
+  type = string
 }
 
 # A Mac with Apple Silicon builds arm64 images, and Graviton Fargate is also the cheaper option.
@@ -94,4 +112,23 @@ variable "enable_tracing" {
   description = "Adds the ADOT collector sidecar and the OpenTelemetry agent. Leave off for benchmark runs."
   type        = bool
   default     = false
+}
+
+variable "trace_ratio" {
+  description = "Fraction of root traces sampled when enable_tracing is on."
+  type        = number
+  default     = 1.0
+}
+
+variable "enable_runner" {
+  description = "EC2 instance in the nodes' AZ for k6, psql and per-node polling."
+  type        = bool
+  default     = true
+}
+
+# Non-burstable for the same reason as the DB: a t-class generator runs out of CPU credits partway through
+# a session, gets throttled, and the measured latency then includes the generator falling behind.
+variable "runner_instance_type" {
+  type    = string
+  default = "c7g.large"
 }

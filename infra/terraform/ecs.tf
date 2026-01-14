@@ -19,7 +19,18 @@ locals {
     OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf"
     OTEL_METRICS_EXPORTER       = "none"
     OTEL_LOGS_EXPORTER          = "none"
+    OTEL_TRACES_SAMPLER         = "parentbased_traceidratio"
+    OTEL_TRACES_SAMPLER_ARG     = tostring(var.trace_ratio)
   }
+
+  # The OpenTelemetry agent instruments classes as they load, which slows startup.
+  health_check_grace_period = var.enable_tracing ? 120 : var.health_check_grace_period
+
+  # The JVM sizes its heap with MaxRAMPercentage against the cgroup limit it sees. Without a container-level
+  # limit that is the whole task, so with the sidecar running the heap would be sized for memory the collector
+  # also uses. Giving each container its own limit makes the app's share explicit.
+  collector_memory = 256
+  app_memory       = var.enable_tracing ? var.task_memory - local.collector_memory : var.task_memory
 
   # Ships the collector's own config that receives OTLP and exports traces to X-Ray only, so tracing
   # doesn't also start writing EMF metrics to CloudWatch.
@@ -27,6 +38,7 @@ locals {
     name      = "adot-collector"
     image     = "public.ecr.aws/aws-observability/aws-otel-collector:v0.45.1"
     essential = false
+    memory    = local.collector_memory
     command   = ["--config=/etc/ecs/ecs-xray.yaml"]
     logConfiguration = {
       logDriver = "awslogs"
@@ -122,6 +134,7 @@ resource "aws_ecs_task_definition" "node" {
       name         = "app"
       image        = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
       essential    = true
+      memory       = local.app_memory
       portMappings = [{ containerPort = 8080, protocol = "tcp" }]
       environment = [for k, v in merge({
         NODE_ID                  = each.key
@@ -129,6 +142,9 @@ resource "aws_ecs_task_definition" "node" {
         HOTSHIELD_MODE           = var.hotshield_mode
         HOTSHIELD_CACHE_TTL      = var.cache_ttl
         HOTSHIELD_DB_DELAY       = var.db_delay
+        HOTSHIELD_TOMBSTONE_TTL  = var.tombstone_ttl
+        DB_POOL_SIZE             = tostring(var.db_pool_size)
+        FORWARD_TIMEOUT          = var.forward_timeout
         DB_URL                   = "jdbc:postgresql://${aws_db_instance.main.address}:5432/${aws_db_instance.main.db_name}"
         DB_USER                  = aws_db_instance.main.username
         JAVA_TOOL_OPTIONS        = local.java_tool_options
@@ -152,15 +168,26 @@ resource "aws_ecs_task_definition" "node" {
 resource "aws_ecs_service" "node" {
   for_each = local.nodes
 
-  name                              = each.key
-  cluster                           = aws_ecs_cluster.main.id
-  task_definition                   = aws_ecs_task_definition.node[each.key].arn
-  desired_count                     = 1
-  launch_type                       = "FARGATE"
-  health_check_grace_period_seconds = var.health_check_grace_period
+  name                  = each.key
+  cluster               = aws_ecs_cluster.main.id
+  task_definition       = aws_ecs_task_definition.node[each.key].arn
+  desired_count         = 1
+  launch_type           = "FARGATE"
+  propagate_tags        = "SERVICE"
+  wait_for_steady_state = true
+
+  health_check_grace_period_seconds = local.health_check_grace_period
+
+  # Stop the old task before starting the new one. Two copies of a node would both register under the same
+  # Cloud Map name and in the ALB target group, so during a deploy that changes hotshield_mode the ALB would
+  # serve two modes at once and peers would resolve the node name to either copy.
+  deployment_minimum_healthy_percent = 0
+  deployment_maximum_percent         = 100
 
   network_configuration {
-    subnets          = aws_subnet.public[*].id
+    # One AZ for all nodes, the DB and the runner keeps node-to-node and node-to-DB latency equal, so
+    # per-node p99s can be compared. A cross-AZ hop would add latency to some nodes and not others.
+    subnets          = [aws_subnet.public[0].id]
     security_groups  = [aws_security_group.tasks.id]
     assign_public_ip = true
   }

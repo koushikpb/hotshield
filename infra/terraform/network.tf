@@ -120,3 +120,25 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_tasks" {
   from_port                    = 5432
   to_port                      = 5432
 }
+
+# The runner polls each node's /actuator endpoints and can hit a node directly, bypassing the ALB.
+resource "aws_vpc_security_group_ingress_rule" "tasks_from_runner" {
+  count = var.enable_runner ? 1 : 0
+
+  security_group_id            = aws_security_group.tasks.id
+  referenced_security_group_id = aws_security_group.runner[0].id
+  ip_protocol                  = "tcp"
+  from_port                    = 8080
+  to_port                      = 8080
+}
+
+# Seeding and pg_stat_statements_reset() between runs. The DB has no public address, so this is the way in.
+resource "aws_vpc_security_group_ingress_rule" "rds_from_runner" {
+  count = var.enable_runner ? 1 : 0
+
+  security_group_id            = aws_security_group.rds.id
+  referenced_security_group_id = aws_security_group.runner[0].id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+}

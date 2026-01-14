@@ -16,7 +16,9 @@ resource "aws_lb_target_group" "app" {
   deregistration_delay = var.deregistration_delay
 
   health_check {
-    path                = "/actuator/health"
+    # Liveness leaves the DB out. With /actuator/health, DB pressure during a herd run would fail the check
+    # and ECS would replace healthy tasks in the middle of the measurement.
+    path                = "/actuator/health/liveness"
     matcher             = "200"
     interval            = var.health_check_interval
     timeout             = 5
@@ -36,7 +38,10 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# Same as infra/nginx.conf: the owner-to-owner path is for nodes only.
+# Same as infra/nginx.conf: the owner-to-owner path is for nodes only. This rule alone is not enough,
+# because the ALB matches the raw path and does not normalize it, so //internal/items/1 slips past and
+# Spring may still route it. The app also rejects /internal requests carrying X-Forwarded-For, which the
+# ALB always adds and a direct peer call never has.
 resource "aws_lb_listener_rule" "block_internal" {
   listener_arn = aws_lb_listener.http.arn
   priority     = 10

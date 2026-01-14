@@ -48,6 +48,9 @@ resource "aws_db_instance" "main" {
   multi_az               = false
   publicly_accessible    = false
 
+  # Same AZ as the nodes and the runner, see the subnet note on the ECS services.
+  availability_zone = local.azs[0]
+
   # Disposable benchmark database: destroy must not leave a snapshot or backups behind, and must not be blocked.
   skip_final_snapshot     = true
   deletion_protection     = false

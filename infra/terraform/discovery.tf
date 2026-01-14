@@ -10,6 +10,10 @@ resource "aws_service_discovery_service" "node" {
 
   name = each.key
 
+  # Destroy can race ECS deregistering the last task's instance; without this, deleting a service that still
+  # has an instance fails and leaves the namespace behind.
+  force_destroy = true
+
   dns_config {
     namespace_id   = aws_service_discovery_private_dns_namespace.main.id
     routing_policy = "MULTIVALUE"
