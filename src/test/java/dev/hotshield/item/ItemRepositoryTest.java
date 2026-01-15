@@ -17,7 +17,6 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-// Fails until you write V1__create_items.sql and the three queries in ItemRepository (milestone 1).
 @JdbcTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import({ItemRepository.class, SimpleMeterRegistry.class})
@@ -91,14 +90,25 @@ class ItemRepositoryTest {
         assertThat(repository.findByCategory("kitchen", 0, 2)).hasSize(2);
     }
 
+    // The registry lives in the cached test context, so other tests' queries are already counted. Compare deltas.
     @Test
     void everyCallCountsOneQuery() {
+        double totalBefore = totalQueries();
+        double findByIdBefore = findByIdQueries();
+
         repository.findById(1);
         repository.findById(999);
         repository.findByCategory("home", 0, 10);
 
-        var total = registry.get("db.queries").counters().stream().mapToDouble(Counter::count).sum();
-        assertThat(total).isEqualTo(3);
-        assertThat(registry.get("db.queries").tag("op", "findById").counter().count()).isEqualTo(2);
+        assertThat(totalQueries() - totalBefore).isEqualTo(3);
+        assertThat(findByIdQueries() - findByIdBefore).isEqualTo(2);
+    }
+
+    private double totalQueries() {
+        return registry.get("db.queries").counters().stream().mapToDouble(Counter::count).sum();
+    }
+
+    private double findByIdQueries() {
+        return registry.get("db.queries").tag("op", "findById").counter().count();
     }
 }

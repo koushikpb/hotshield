@@ -26,29 +26,54 @@ public class ItemRepository {
     }
 
     public Optional<Item> findById(long id) {
-        // Milestone 1 (yours): select one item by id with jdbc.sql(...).param(...).query(Item.class).optional().
-        Optional<Item> item = notWritten("findById");
+        Optional<Item> item = jdbc.sql("""
+                        select id, sku, name, category, price_cents, stock, version, updated_at
+                        from items
+                        where id = :id
+                        """)
+                .param("id", id)
+                .query(Item.class)
+                .optional();
         findByIdQueries.increment();
         return item;
     }
 
-    // Returns the updated row so the caller gets the new version without a second read.
+    // Returns the updated row so the caller gets the new version without a second read. The version bump is
+    // part of the same statement, so two concurrent PUTs can't both end up with the same version.
     public Optional<Item> update(long id, ItemUpdate update) {
-        // Milestone 1 (yours): update name, price_cents, stock; bump version; set updated_at; return the row.
-        Optional<Item> item = notWritten("update");
+        Optional<Item> item = jdbc.sql("""
+                        update items
+                        set name = :name, price_cents = :priceCents, stock = :stock,
+                            version = version + 1, updated_at = now()
+                        where id = :id
+                        returning id, sku, name, category, price_cents, stock, version, updated_at
+                        """)
+                .param("id", id)
+                .param("name", update.name())
+                .param("priceCents", update.priceCents())
+                .param("stock", update.stock())
+                .query(Item.class)
+                .optional();
         updateQueries.increment();
         return item;
     }
 
+    // The query for the EXPLAIN ANALYZE experiment. The (category, price_cents) index in V2 matches both the
+    // filter and the order by, so Postgres can stop after `limit` rows instead of sorting the whole category.
     public List<Item> findByCategory(String category, int minPriceCents, int limit) {
-        // Milestone 1 (yours): this is the query for the EXPLAIN ANALYZE experiment.
-        List<Item> items = notWritten("findByCategory");
+        List<Item> items = jdbc.sql("""
+                        select id, sku, name, category, price_cents, stock, version, updated_at
+                        from items
+                        where category = :category and price_cents >= :minPriceCents
+                        order by price_cents
+                        limit :limit
+                        """)
+                .param("category", category)
+                .param("minPriceCents", minPriceCents)
+                .param("limit", limit)
+                .query(Item.class)
+                .list();
         categoryQueries.increment();
         return items;
-    }
-
-    // Delete once the three queries above are written.
-    private static <T> T notWritten(String query) {
-        throw new UnsupportedOperationException(query + ": write this query");
     }
 }
