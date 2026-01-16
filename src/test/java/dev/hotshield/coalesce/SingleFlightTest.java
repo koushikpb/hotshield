@@ -18,7 +18,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-// Fails until you write SingleFlight (milestone 3).
 // An implementation that runs the loader under synchronized or inside ConcurrentHashMap.computeIfAbsent can
 // pin every carrier thread and hang the JVM; the Gradle test timeout turns that into a failure. That hang is
 // the virtual-thread pinning problem the plan warns about, not a test bug.

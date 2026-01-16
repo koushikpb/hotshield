@@ -209,7 +209,6 @@ class ItemServiceTest {
         verify(peers, never()).fetch(any(), any(Long.class));
     }
 
-    // Fails until SingleFlight is written (milestone 3).
     @Test
     void coalesceModeSharesOneReadAcrossConcurrentMisses() throws Exception {
         int callers = 1_000;
@@ -298,7 +297,7 @@ class ItemServiceTest {
     }
 
     // The owner missed the invalidation for version 5 and still serves version 3. This node must not return or
-    // cache version 3, and must tell the owner what it missed. Goes through SingleFlight, so fails until it exists.
+    // cache version 3, and must tell the owner what it missed.
     @Test
     void staleOwnerResultIsReplacedByADatabaseReadAndTheOwnerIsRepaired() {
         when(cluster.ownerOf(1)).thenReturn("node-b");
