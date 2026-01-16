@@ -62,7 +62,7 @@ k6 run -e BASE_URL=<alb_url> loadtest/<scenario>.js
 ```
 
 The runner can also reach each node directly on `:8080` (via its task IP) and RDS on 5432. To seed or to reset
-`pg_stat_statements` between runs, run your seed script from the runner with `psql`, using `rds_endpoint`,
+`pg_stat_statements` between runs, run `loadtest/seed.sql` from the runner with `psql -f`, using `rds_endpoint`,
 user `hotshield` and the password from SSM:
 
 ```sh

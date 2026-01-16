@@ -90,7 +90,7 @@ kill %1
   and `dropped_iterations` with the results.
 - Restart the app between modes. Counters such as `cache.gets` are cumulative, and a warm cache
   from the previous mode would leak into the next one.
-- `mixed.js` and `herd.js` write rows. Reseed after them, or keep a fixed run order so every
+- `mixed.js` and `herd.js` write rows. Reseed (`loadtest/seed.sql`) after them, or keep a fixed run order so every
   mode sees the same data.
 - Postgres' buffer cache carries over between runs, so the second mode tested reads from warmer
   pages than the first. Either run one discarded warmup pass before the measured runs or restart
