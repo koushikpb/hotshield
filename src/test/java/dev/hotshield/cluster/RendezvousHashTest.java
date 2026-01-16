@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-// Fails until you write RendezvousHash (milestone 5).
 class RendezvousHashTest {
 
     static final List<String> THREE = List.of("node-a", "node-b", "node-c");
