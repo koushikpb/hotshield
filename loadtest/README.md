@@ -111,3 +111,48 @@ the fault pass: `docker pause hotshield-node-b-1` for a few seconds mid-run, the
 invalidations to node-b are lost. The pollers add about `WRITE_RATE * 1000 / POLL_MS` req/s on top of
 `RATE`; report it with the run. Run it with `HOTSHIELD_CACHE_TTL=10m`, so the TTL cannot hide a lost
 invalidation, and record `stale_reads`, `poll_reads`, and the `staleness_ms` percentiles.
+
+## bench.sh
+
+`bench.sh` does one measured run end to end: it restarts the app in the given mode, resets
+`pg_stat_statements`, samples the server counters every 200ms, runs k6 (`grafana/k6:2.3.0`) and prints a
+`docs/EXPERIMENTS.md`-shaped block cut to the measured window. Run `loadtest/bench.sh` with no arguments for
+the options. It refuses to start while the machine is busy (load average above 2.5, under 30% free memory,
+or containers from other projects running), because those numbers would measure the machine.
+
+Before the first run of a session: `./gradlew bootJar`, `docker compose up -d`, seed once with
+`docker compose exec -T postgres psql -U hotshield hotshield < loadtest/seed.sql`, and close what you can.
+
+## Benchmark plan
+
+The order matters: each step's rate comes from the step before it, and every comparison within a step
+uses the same rate, duration, warmup and seed. `bench.sh` restarts the app and prewarms the table before
+every run, so no separate warmup pass is needed.
+
+1. **Direct capacity.** Run `loadtest/bench.sh cap-direct-<rate> direct zipf.js <rate>` at 500, 1000, 1500
+   and 2000. `RATE` is the highest rate where direct mode had 0 dropped iterations and under 1% errors, so
+   direct mode is loaded but still valid and cache and coalesce have something to improve on.
+2. **Modes at the same rate (milestones 2–4).** For each of `uniform.js`, `zipf.js` and `flash.js`, run
+   `direct`, `cache` and `coalesce`: `loadtest/bench.sh <scenario>-<mode> <mode> <scenario>.js $RATE`.
+   Run `direct` first for each scenario: uniform reads colder pages than zipf, so direct may not hold
+   `$RATE` there. If it drops iterations, rerun all three modes of that scenario at a lower rate.
+3. **Herd (milestone 4).** `APP_ENV="HOTSHIELD_CACHE_TTL=10m HOTSHIELD_DB_DELAY=20ms" RESEED=1` with
+   `herd.js` at 300 req/s, in `cache` and `coalesce`. Not `direct`: without a cache there is no herd, every
+   read is already a query.
+4. **Cluster (milestone 5).** `TARGET=cluster` with `zipf.js` and `flash.js` at `$RATE`, in `coalesce`
+   (three independent caches behind nginx) and `distributed`. The number to compare is DB queries per GET.
+5. **Owner down (milestone 5).** Node-a owns `FLASH_ID=42` for nodes a, b and c. Send traffic to node-b
+   only and pause node-a, so every forward for 42 has to time out and fall back:
+   `TARGET=cluster K6_BASE_URL=http://host.docker.internal:8082 APP_ENV="HOTSHIELD_CACHE_TTL=2s"
+   PAUSE_NODE=node-a PAUSE_AT=20 PAUSE_FOR=10` with `flash.js` at 300 req/s in `distributed`. The short TTL
+   makes node-b miss 42 every 2s; with the default 30s it might not miss at all during the pause. Through
+   nginx a third of requests would go to the paused node itself and show up as client timeouts, which is a
+   different failure than the one this step measures. Record forward fallbacks, errors and latency.
+6. **Staleness (milestone 6).** `TARGET=cluster RESEED=1 APP_ENV="HOTSHIELD_CACHE_TTL=10m"
+   K6_ENV="-e WRITE_RATE=5"` with `staleness.js` at 300 req/s in `distributed`, once healthy and once
+   with `PAUSE_AT=20 PAUSE_FOR=5` (node-b by default).
+
+Copy each printed block into `docs/EXPERIMENTS.md` and add the hypothesis before the run, not after.
+`DB queries per GET` counts every GET the servers saw in the window, including herd's burst and the
+staleness pollers; `Cache hit % per lookup` is not the same thing, because a coalesce leader checks the
+cache twice and a forwarded miss is looked up on two nodes.
