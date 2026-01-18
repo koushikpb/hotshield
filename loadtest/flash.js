@@ -4,6 +4,7 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { BASE_URL, READ_TAGS, buildOptions, uniform01, zipfSampler } from './lib.js';
+export { setup } from './lib.js';
 
 const FLASH_ID = Number(__ENV.FLASH_ID || 42);
 const FLASH_SHARE = Number(__ENV.FLASH_SHARE || 0.5);

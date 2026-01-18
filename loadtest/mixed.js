@@ -5,6 +5,7 @@ import http from 'k6/http';
 import exec from 'k6/execution';
 import { check } from 'k6';
 import { BASE_URL, READ_TAGS, WRITE_TAGS, buildOptions, uniform01, zipfSampler } from './lib.js';
+export { setup } from './lib.js';
 
 const WRITE_SHARE = Number(__ENV.WRITE_SHARE || 0.05);
 const zipfId = zipfSampler();

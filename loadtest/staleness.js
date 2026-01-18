@@ -10,6 +10,7 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Counter, Trend } from 'k6/metrics';
 import { BASE_URL, READ_TAGS, WRITE_TAGS, buildOptions, seconds, uniform01 } from './lib.js';
+export { setup } from './lib.js';
 
 const HOT_KEYS = Number(__ENV.HOT_KEYS || 50);
 // Writers use a smaller set so concurrent writes to the same key actually happen.

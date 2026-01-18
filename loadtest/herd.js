@@ -16,6 +16,7 @@ import {
   BASE_URL, DURATION, READ_TAGS, WARMUP, WRITE_TAGS,
   buildOptions, seconds, uniform01, zipfSampler,
 } from './lib.js';
+export { setup } from './lib.js';
 
 const FLASH_ID = Number(__ENV.FLASH_ID || 42);
 const FLASH_SHARE = Number(__ENV.FLASH_SHARE || 0.5);

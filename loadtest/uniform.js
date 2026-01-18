@@ -3,6 +3,7 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { BASE_URL, READ_TAGS, buildOptions, uniformId } from './lib.js';
+export { setup } from './lib.js';
 
 export const options = buildOptions();
 

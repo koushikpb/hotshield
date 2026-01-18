@@ -70,6 +70,13 @@ export function buildOptions(extraScenarios = {}, extraThresholds = {}) {
   };
 }
 
+// Scenario start times count from the end of setup(), so this timestamp plus WARMUP is when the measured
+// phase starts. bench.sh reads it to cut the server-side counters to the same window as the k6 numbers,
+// without a per-request --out file that would cost the generator CPU on the same machine.
+export function setup() {
+  console.log(`test_start_ms=${Date.now()}`);
+}
+
 // Accepts k6-style durations ("500ms", "20s", "1m30s"). Needed to place herd's PUT at
 // WARMUP + HERD_AT, since k6 only takes startTime as a single string.
 export function seconds(duration) {
