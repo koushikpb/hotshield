@@ -28,7 +28,7 @@ One entry per run. Numbers come from real runs only.
 
 ## Runs
 
-### 2026-01-17 — index vs no index on the category query
+### 2026-10-23 — index vs no index on the category query
 - Commit: baa8029
 - Mode: n/a (psql against the compose Postgres)
 - Environment: local docker, Apple M2 8 GB, Docker Desktop VM 4 GB, `postgres:16-alpine` default config.
@@ -90,3 +90,27 @@ QUERY PLAN
 
 - What happened vs the hypothesis:
 - Next change:
+
+### 2026-10-23 — one request traced across two nodes (milestone 7)
+- Commit: 4c752ae (traces are unchanged by the uncommitted harness work)
+- Mode: distributed (cluster), `TRACING=-javaagent:/app/opentelemetry-javaagent.jar`, `TRACE_RATIO=1.0`
+- Environment: local docker, same busy machine as the index entry. These were the first requests after the
+  nodes started, so the durations include cold-JVM time and say nothing about steady-state latency.
+- Request: `GET /items/101` sent straight to node-a (port 8081). Rendezvous hashing makes node-c the owner.
+
+Span tree from Jaeger (operation [node] duration attributes):
+```
+GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': '/items/101'}
+  cache.lookup [node-a] 53.2ms {'item.id': 101}
+  singleflight.forward [node-a] 373.6ms {'hotshield.owner': 'node-c', 'hotshield.singleflight.role': 'leader', 'item.id': 101}
+    cache.lookup [node-a] 0.0ms {'item.id': 101}
+    owner.forward [node-a] 351.0ms {'hotshield.owner': 'node-c', 'item.id': 101}
+      GET [node-a] 233.3ms {'http.response.status_code': 200}
+        GET /internal/items/{id} [node-c] 117.4ms {'http.response.status_code': 200, 'url.path': '/internal/items/101'}
+          cache.lookup [node-c] 33.6ms {'item.id': 101}
+          singleflight.load [node-c] 48.9ms {'hotshield.singleflight.role': 'leader', 'item.id': 101}
+            cache.lookup [node-c] 0.0ms {'item.id': 101}
+            item.read_db [node-c] 36.9ms {'item.id': 101}
+              hotshield [node-c] 0.8ms {'db.statement': ''}
+              SELECT hotshield.items [node-c] 14.7ms {'db.statement': 'select id, sku, name, category, price_cents, stock, version, updated_at from items where id = ? '}
+```
