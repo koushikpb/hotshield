@@ -114,3 +114,31 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
               hotshield [node-c] 0.8ms {'db.statement': ''}
               SELECT hotshield.items [node-c] 14.7ms {'db.statement': 'select id, sku, name, category, price_cents, stock, version, updated_at from items where id = ? '}
 ```
+
+### 2026-10-24 — direct mode capacity on zipf (benchmark plan step 1)
+- Commit: 9345afe
+- Mode: direct
+- Environment: local, Apple M2 8 GB. k6 (`grafana/k6:2.3.0`), Postgres (`postgres:16-alpine`, default config)
+  and the poller in the Docker Desktop VM; the app jar on the host. Chrome and other projects closed, every
+  run passed the bench.sh gate (load1 under 2.0, 44–69% free). About 0.9–3 GB of old swap was still in use.
+- Load: `zipf.js`, DURATION=60s, WARMUP=15s, SEED=1, MAX_ID=1000000. The first run reseeded; every run
+  prewarmed `items` and `items_pkey`.
+- Config: DB pool size 10, app restarted before every run, tracing off.
+- Hypothesis (written before the run):
+
+| RATE | Achieved req/s | DB queries/s | p50 / p95 / p99 (ms) | Max (ms) | Error % | Pool pending (max) | Dropped |
+|---|---|---|---|---|---|---|---|
+| 500 | 500.0 | 499.6 | 0.88 / 1.54 / 4.11 | 24.2 | 0.000 | 0 | 0 |
+| 750 | 750.0 | 750.9 | 0.75 / 1.54 / 5.07 | 81.6 | 0.000 | 0 | 0 |
+| 1000 | 990.7 | 918.1 | 0.70 / 1967.88 / 2873.90 | 3870.0 | 4.620 | 1848 | 559 |
+| 1500 | 1061.0 | 686.1 | 132.15 / 2435.24 / 2756.25 | 6199.1 | 37.051 | 2144 | 25542 |
+| 2000 | 912.0 | 880.1 | 724.76 / 1833.20 / 2473.30 | 4552.1 | 4.161 | 779 | 41513 |
+
+- The full bench.sh blocks are in `loadtest/results/cap-direct-<rate>/report.md` (not committed).
+- 750 was probed after the planned four, because 500 left direct mode at a 4 ms p99. At 750 the poller
+  missed eight 500 ms samples in the last 10 s of the measured phase; at 1000 the pool queue reached 1848.
+- `RATE` for steps 2 and 4: 750.
+- In the failing runs, "GETs served without a DB read" is not meaningful (it reads 14% at 1500 in direct
+  mode): a request that times out waiting for a connection counts as a GET but never runs a query.
+- What happened vs the hypothesis:
+- Next change:
