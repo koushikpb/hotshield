@@ -37,11 +37,19 @@ fi
 # Numbers from a machine that is swapping or busy with something else measure the machine. Refuse to start
 # rather than produce them; BENCH_FORCE=1 overrides and the override is recorded with the run.
 gate() {
-  local load free others
-  load=$(sysctl -n vm.loadavg | awk '{print $2}')
-  free=$(memory_pressure | awk -F': ' '/free percentage/ {print $2+0}')
+  local load free swap others
+  if [[ $(uname) == Darwin ]]; then
+    load=$(sysctl -n vm.loadavg | awk '{print $2}')
+    free=$(memory_pressure | awk -F': ' '/free percentage/ {print $2+0}')
+    swap=$(sysctl -n vm.swapusage | awk '{print $6}')
+  else
+    load=$(cut -d' ' -f1 /proc/loadavg)
+    # MemAvailable, not MemFree: Linux fills free memory with page cache it can drop.
+    free=$(awk '/^MemTotal/ {t = $2} /^MemAvailable/ {a = $2} END {print int(100 * a / t)}' /proc/meminfo)
+    swap=$(free -m | awk '/^Swap/ {print $3 "M"}')
+  fi
   others=$(docker ps --format '{{.Names}}' | grep -v '^hotshield-' || true)
-  echo "gate: load1=$load free=${free}% swap=$(sysctl -n vm.swapusage | awk '{print $6}') other_containers=[${others//$'\n'/ }]"
+  echo "gate: load1=$load free=${free}% swap=$swap other_containers=[${others//$'\n'/ }]"
   if awk -v l="$load" 'BEGIN {exit !(l > 2.5)}' || (( free < 30 )) || [[ -n $others ]]; then
     if [[ ${BENCH_FORCE:-0} != 1 ]]; then
       echo "gate: machine is busy (need load1 <= 2.5, free >= 30%, no other containers); BENCH_FORCE=1 to run anyway" >&2
@@ -178,8 +186,11 @@ if [[ -n ${PAUSE_AT:-} ]]; then
 fi
 
 # k6 exits 99 when a threshold fails (dropped iterations); keep going so the report says what happened.
+# --add-host gives Linux the host.docker.internal name that Docker Desktop has built in, and -u lets k6
+# write summary.json into a results folder owned by this user.
 # shellcheck disable=SC2086
-docker run --rm -i -v "$ROOT/loadtest:/scripts:ro" -v "$OUT:/out" grafana/k6:2.3.0 run -q \
+docker run --rm -i -u "$(id -u):$(id -g)" --add-host=host.docker.internal:host-gateway -v "$ROOT/loadtest:/scripts:ro" -v "$OUT:/out" \
+  grafana/k6:2.3.0 run -q \
   -e BASE_URL="${K6_BASE_URL:-http://host.docker.internal:8080}" -e RATE="$RATE" -e DURATION="$DURATION" -e WARMUP="$WARMUP" \
   -e SEED=1 -e MAX_ID=1000000 ${K6_ENV:-} --summary-export /out/summary.json "/scripts/$SCENARIO" \
   > "$OUT/k6.txt" 2>&1 || echo "k6_exit=$?" >> "$OUT/k6.txt"
