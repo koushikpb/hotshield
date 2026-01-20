@@ -108,7 +108,8 @@ psql_q -c 'create extension if not exists pg_prewarm' \
 trap cleanup EXIT
 stop_app
 if [[ $TARGET == single ]]; then
-  ./gradlew bootJar -q
+  # No daemon: an idle Gradle daemon would hold about 400 MB through the measured run.
+  ./gradlew bootJar -q --no-daemon
   # shellcheck disable=SC2086
   env HOTSHIELD_MODE="$MODE" ${APP_ENV:-} java -jar build/libs/app.jar > "$OUT/app.log" 2>&1 &
   APP_PID=$!
