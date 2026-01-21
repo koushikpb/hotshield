@@ -142,3 +142,31 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
   mode): a request that times out waiting for a connection counts as a GET but never runs a query.
 - What happened vs the hypothesis:
 - Next change:
+
+### 2026-10-25 — direct mode capacity on zipf, EC2 VM (benchmark plan step 1)
+- Commit: a5c60fc
+- Mode: direct
+- Environment: AWS EC2 `c7i.2xlarge` (8 vCPU, 16 GiB), us-east-2, Ubuntu 24.04, Docker Engine 29.1.3,
+  OpenJDK 21.0.12. k6, Postgres (`postgres:16-alpine`, default config) and the poller in containers; the app
+  jar on the host. Nothing else running; every run passed the gate (load1 under 1.0, 93–94% free, no swap).
+  This machine replaces the Mac for steps 2–6, so `RATE` comes from here.
+- Load: `zipf.js`, DURATION=60s, WARMUP=15s, SEED=1, MAX_ID=1000000. The first run reseeded; every run
+  prewarmed `items` and `items_pkey`.
+- Config: DB pool size 10, app restarted before every run, tracing off.
+- Hypothesis (written before the run):
+
+| RATE | Achieved req/s | DB queries/s | p50 / p95 / p99 (ms) | Max (ms) | Error % | Pool pending (max) | Dropped |
+|---|---|---|---|---|---|---|---|
+| 1000 | 1000.0 | 1000.5 | 0.56 / 1.11 / 1.68 | 37.2 | 0.000 | 0 | 0 |
+| 2000 | 2000.0 | 1999.8 | 0.41 / 0.84 / 1.64 | 76.9 | 0.000 | 89 | 0 |
+| 3000 | 3000.0 | 2996.2 | 0.34 / 0.74 / 1.74 | 21.9 | 0.000 | 0 | 0 |
+| 4000 | 4000.0 | not sampled | 0.35 / 0.75 / 3.81 | 5008.0 | 6.375 | not sampled | 2434 |
+
+- At 4000 the poller could not reach the app for the whole measured window, so the server-side rows are
+  missing. From the app log and the kernel counters of that run: Hikari's 10 connections were all busy,
+  up to 8,111 requests waited for one, and 14,914 gave up after the 2 s `connection-timeout`
+  (`SQLTransientConnectionException`). `TcpExtListenDrops` was 167,773: the accept queue overflowed, so
+  some connections were never accepted and k6 hit its 5 s timeout. The median stayed at 0.35 ms throughout.
+- `RATE` for steps 2 and 4: 3000.
+- What happened vs the hypothesis:
+- Next change:
