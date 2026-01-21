@@ -34,8 +34,10 @@ if [[ -e $OUT ]]; then
   exit 1
 fi
 
-# Numbers from a machine that is swapping or busy with something else measure the machine. Refuse to start
-# rather than produce them; BENCH_FORCE=1 overrides and the override is recorded with the run.
+# Numbers from a machine that is short of memory or busy with something else measure the machine. Refuse to
+# start rather than produce them; BENCH_FORCE=1 overrides and the override is recorded with the run. Swap is
+# only printed: macOS keeps old pages in swap long after the pressure is gone. load1 is a one-minute average,
+# so right after a run it stays high for a minute or two; wait rather than force.
 gate() {
   local load free swap others
   if [[ $(uname) == Darwin ]]; then
