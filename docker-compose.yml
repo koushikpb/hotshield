@@ -1,3 +1,6 @@
+# Fixed, so container names (hotshield-node-b-1) don't depend on the checkout folder's name; bench.sh uses them.
+name: hotshield
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -23,6 +26,10 @@ services:
   node-a: &node
     profiles: [cluster]
     build: .
+    # The Fargate task size. Without a limit each JVM on a Linux host sizes its heap and GC threads from the
+    # whole machine (three 12 GB max heaps on a 16 GB box); Docker Desktop only hid that behind its VM size.
+    cpus: 1
+    mem_limit: 2g
     ports:
       - "8081:8080"
     depends_on:
