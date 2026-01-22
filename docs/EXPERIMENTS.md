@@ -202,3 +202,26 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
 - The full bench.sh blocks are in `loadtest/results/<scenario>-<mode>-3000/report.md` on the VM (not committed).
 - What happened vs the hypothesis:
 - Next change:
+
+### 2026-10-25 — herd, first attempt: the burst missed the window (benchmark plan step 3)
+- Commit: fc68c62
+- Mode: cache, coalesce
+- Environment: the EC2 VM from the step 1 entry. Both runs passed the gate.
+- Load: `herd.js`, RATE=300, DURATION=60s, WARMUP=15s, SEED=1, MAX_ID=1000000, HERD_AT=20s, FLASH_ID=42,
+  FLASH_SHARE=0.5, BURST_VUS=200, BURST_DELAY=50ms. Reseeded before each run.
+- Config: `HOTSHIELD_CACHE_TTL=10m`, `HOTSHIELD_DB_DELAY=20ms`, DB pool size 10, app restarted before every run.
+
+| Metric | cache | coalesce |
+|---|---|---|
+| Achieved req/s | 300.0 | 300.0 |
+| DB queries/s | 50.4 | 50.4 |
+| p50 / p95 / p99 (ms) | 0.53 / 22.01 / 22.60 | 0.54 / 22.03 / 22.55 |
+| Error % | 0.000 | 0.000 |
+| Queries from PUT to PUT+1s | 62 | 58 |
+| Burst reads, p50 / p99 (ms) | 200, 2.8 / 5.8 | 200, 7.2 / 13.4 |
+
+- Neither run shows a herd: the second after the PUT has about the same number of queries as any other
+  second. The PUT has no artificial delay and returns within a few ms; the next read of 42 refills the
+  cache one `DB_DELAY` (20 ms) later; the burst fired 50 ms after the PUT started, so it found 42 cached
+  again. These runs don't test coalescing. The setup was changed (DB_DELAY=50ms, BURST_DELAY=10ms, PUT
+  latency now reported) and the runs repeated; see the next herd entry.
