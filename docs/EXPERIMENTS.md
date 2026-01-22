@@ -170,3 +170,35 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
 - `RATE` for steps 2 and 4: 3000.
 - What happened vs the hypothesis:
 - Next change:
+
+### 2026-10-25 — direct vs cache vs coalesce on uniform, zipf and flash (benchmark plan step 2)
+- Commit: 939f87c
+- Mode: direct, cache, coalesce (one run each per scenario, direct first)
+- Environment: the EC2 VM from the step 1 entry (c7i.2xlarge, us-east-2). Every run passed the gate
+  (load1 under 1.0, 94% free, no swap).
+- Load: RATE=3000, DURATION=60s, WARMUP=15s, SEED=1, MAX_ID=1000000; `zipf.js` and `flash.js` with their
+  defaults (ZIPF_S=1.1; FLASH_ID=42, FLASH_SHARE=0.5). No reseed (these scenarios only read); every run
+  prewarmed `items` and `items_pkey`.
+- Config: DB pool size 10, cache defaults (`HOTSHIELD_CACHE_TTL` 30s), app restarted before every run,
+  tracing off.
+- Hypothesis (written before the run): none was written before these runs.
+
+| Scenario | Mode | Achieved req/s | DB queries/s | DB queries per GET | p50 / p95 / p99 (ms) | Max (ms) | Error % | Pool pending (max) | Dropped |
+|---|---|---|---|---|---|---|---|---|---|
+| uniform | direct | 3000.0 | 2998.0 | 1.0000 | 0.35 / 0.76 / 1.74 | 37.4 | 0.000 | 0 | 0 |
+| uniform | cache | 3000.0 | 2756.5 | 0.9205 | 0.35 / 0.78 / 2.92 | 29.4 | 0.000 | 0 | 0 |
+| uniform | coalesce | 3000.0 | 2756.4 | 0.9207 | 0.36 / 0.78 / 2.49 | 97.9 | 0.000 | 1 | 0 |
+| zipf | direct | 3000.0 | 3008.1 | 1.0000 | 0.34 / 0.72 / 1.69 | 27.1 | 0.000 | 0 | 0 |
+| zipf | cache | 3000.0 | 674.8 | 0.2251 | 0.22 / 0.66 / 1.29 | 17.9 | 0.000 | 0 | 0 |
+| zipf | coalesce | 3000.0 | 674.7 | 0.2250 | 0.22 / 0.64 / 1.18 | 18.7 | 0.000 | 0 | 0 |
+| flash | direct | 3000.0 | 3010.3 | 1.0000 | 0.35 / 0.77 / 1.90 | 39.7 | 0.000 | 0 | 0 |
+| flash | cache | 3000.1 | 391.8 | 0.1304 | 0.21 / 0.62 / 1.18 | 12.4 | 0.000 | 0 | 0 |
+| flash | coalesce | 3000.0 | 392.5 | 0.1305 | 0.21 / 0.63 / 1.34 | 74.8 | 0.000 | 0 | 0 |
+
+- Cache hit % per lookup: uniform 7.95 (cache) / 4.13 (coalesce), zipf 77.49 / 63.27, flash 86.96 / 76.92.
+  It is lower in coalesce mode because the leader looks the key up a second time before it loads.
+- pg_stat_statements findById calls (whole run, warmup included): uniform 224275 / 208667 / 207770,
+  zipf 224119 / 53424 / 53247, flash 223916 / 30811 / 30717 (direct / cache / coalesce).
+- The full bench.sh blocks are in `loadtest/results/<scenario>-<mode>-3000/report.md` on the VM (not committed).
+- What happened vs the hypothesis:
+- Next change:
