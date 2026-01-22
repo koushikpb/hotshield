@@ -147,6 +147,7 @@ def main(out):
 def herd(m, summary, rows, start):
     put_at = start + seconds(k6_env(m, 'HERD_AT', '20s'))
     burst = metric(summary, 'http_req_duration{scenario:burst}')
+    put = metric(summary, 'http_req_duration{scenario:invalidate}')
     print()
     print('Herd: findById queries per poller sample around the PUT (t=0 is when the PUT was scheduled)')
     print()
@@ -157,6 +158,7 @@ def herd(m, summary, rows, start):
         print(f"| {row['t'] - put_at:+.1f} | {row.get('findById', 0) - previous.get('findById', 0):.0f} |")
     print()
     print(f"- Queries from PUT to PUT+1s: {delta(rows, 'findById', put_at, put_at + 1):.0f}")
+    print(f"- PUT latency: {put.get('max', 0):.1f} ms (BURST_DELAY={k6_env(m, 'BURST_DELAY', '50ms')})")
     print(f"- Burst reads: {metric(summary, 'http_reqs{scenario:burst}').get('count', 0)}, "
           f"p50/p99 {burst.get('p(50)', 0):.1f} / {burst.get('p(99)', 0):.1f} ms")
 

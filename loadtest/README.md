@@ -43,7 +43,7 @@ Start the app with two extra settings:
 
 - `HOTSHIELD_CACHE_TTL=10m`, so a TTL expiry on the flash id can't land near the PUT and blur
   which event caused the misses.
-- `HOTSHIELD_DB_DELAY=20ms`, an artificial delay before every `findById` (default 0, herd runs
+- `HOTSHIELD_DB_DELAY=50ms`, an artificial delay before every `findById` (default 0, herd runs
   only). A local primary-key lookup returns so quickly that concurrent
   misses barely overlap, which leaves nothing to coalesce.
 
@@ -136,9 +136,13 @@ every run, so no separate warmup pass is needed.
    `direct`, `cache` and `coalesce`: `loadtest/bench.sh <scenario>-<mode> <mode> <scenario>.js $RATE`.
    Run `direct` first for each scenario: uniform reads colder pages than zipf, so direct may not hold
    `$RATE` there. If it drops iterations, rerun all three modes of that scenario at a lower rate.
-3. **Herd (milestone 4).** `APP_ENV="HOTSHIELD_CACHE_TTL=10m HOTSHIELD_DB_DELAY=20ms" RESEED=1` with
-   `herd.js` at 300 req/s, in `cache` and `coalesce`. Not `direct`: without a cache there is no herd, every
-   read is already a query.
+3. **Herd (milestone 4).** `APP_ENV="HOTSHIELD_CACHE_TTL=10m HOTSHIELD_DB_DELAY=50ms" RESEED=1
+   K6_ENV="-e BURST_DELAY=10ms"` with `herd.js` at 300 req/s, in `cache` and `coalesce`. Not `direct`:
+   without a cache there is no herd, every read is already a query. The burst has to land between the PUT
+   returning and the refill finishing, a window about one `DB_DELAY` long. With 20ms and the default
+   50ms `BURST_DELAY` the key was already back in the cache when the burst fired. Check the printed PUT
+   latency is under `BURST_DELAY`. Don't raise `DB_DELAY` much further: at 200ms the ordinary misses
+   alone keep all 10 pool connections busy.
 4. **Cluster (milestone 5).** `TARGET=cluster` with `zipf.js` and `flash.js` at `$RATE`, in `coalesce`
    (three independent caches behind nginx) and `distributed`. The number to compare is DB queries per GET.
 5. **Owner down (milestone 5).** Node-a owns `FLASH_ID=42` for nodes a, b and c. Send traffic to node-b

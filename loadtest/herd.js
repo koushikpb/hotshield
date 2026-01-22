@@ -50,6 +50,9 @@ export const options = buildOptions({
   },
 }, {
   'checks{scenario:invalidate}': ['rate==1'],
+  // Listed only so the summary export carries it: the burst lands in the miss window only if the PUT
+  // returned before BURST_DELAY and the refill (one DB_DELAY) hadn't finished yet.
+  'http_req_duration{scenario:invalidate}': ['max>=0'],
   'http_req_duration{scenario:burst}': ['p(99)>=0'],
   'http_reqs{scenario:burst}': ['count>=0'],
   'checks{scenario:burst}': ['rate>=0'],
