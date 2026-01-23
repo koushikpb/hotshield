@@ -303,3 +303,80 @@ findById queries per 200 ms poller sample around the PUT (t=0 is the PUT):
 - 40 queries per 200 ms is 200 queries/s, which is 10 pool connections each holding one 50 ms query.
 - What happened vs the hypothesis:
 - Next change:
+
+### 2026-10-25 — cluster: coalesce vs distributed on zipf and flash (benchmark plan step 4)
+- Commit: ce34e77
+- Mode: coalesce (three independent caches behind nginx), distributed (rendezvous owner per key)
+- Environment: the EC2 VM from the step 1 entry; TARGET=cluster, three nodes with `cpus: 1` and
+  `mem_limit: 2g` each, nginx in front. Every run passed the gate.
+- Load: RATE=1000, DURATION=60s, WARMUP=30s, SEED=1, MAX_ID=1000000. Reseeded before the first run.
+  RATE is 1000, not the single-node 3000: with 1 vCPU per node, distributed zipf held 1000 with 0 measured
+  drops and 0 errors, and failed at 1500 (20.538% errors, 4008 measured drops; `cap-cluster-dist-1500`).
+  WARMUP is 30s because one CPU per JVM compiles slowly; drops during the warmup are listed separately.
+- Config: DB pool size 10 per node, `HOTSHIELD_CACHE_TTL` 30s, nodes recreated before every run, tracing off.
+- Hypothesis (written before the run):
+
+| Scenario | Mode | Achieved req/s | DB queries/s | DB queries per GET | p50 / p95 / p99 (ms) | Max (ms) | Error % | Dropped (measured; warmup) | Forwards ok / fallback |
+|---|---|---|---|---|---|---|---|---|---|
+| zipf | coalesce | 1000.0 | 346.5 | 0.3464 | 0.48 / 1.05 / 2.60 | 14.1 | 0.000 | 0; 0 | – |
+| zipf | distributed | 1000.0 | 279.2 | 0.2794 | 0.37 / 1.79 / 13.64 | 70.8 | 0.000 | 0; 1305 | 13738 / 0 |
+| flash | coalesce | 1000.0 | 196.3 | 0.1962 | 0.43 / 1.02 / 2.51 | 27.0 | 0.000 | 0; 0 | – |
+| flash | distributed | 1000.0 | 160.0 | 0.1600 | 0.33 / 1.61 / 2.37 | 14.0 | 0.000 | 0; 0 | 7839 / 0 |
+
+- pg_stat_statements findById calls (whole run, warmup included): zipf 31821 / 24781, flash 17935 / 15634
+  (coalesce / distributed).
+- In the zipf distributed run the poller couldn't reach any node from -28.8 s to -10.4 s (warmup only).
+- What happened vs the hypothesis:
+- Next change:
+
+### 2026-10-25 — owner down: forward timeouts fall back to the database (benchmark plan step 5)
+- Commit: ce34e77
+- Mode: distributed; TARGET=cluster as in step 4
+- Load: `flash.js` (FLASH_ID=42, owned by node-a), RATE=300, DURATION=60s, WARMUP=30s, SEED=1,
+  MAX_ID=1000000, sent to node-b directly (`K6_BASE_URL=http://host.docker.internal:8082`), not through nginx.
+- Fault: `docker pause hotshield-node-a-1` at measured+20s for 10s; the poller saw node-a down from +20.1 s
+  to +29.4 s.
+- Config: `HOTSHIELD_CACHE_TTL=2s` so node-b misses 42 every 2 s during the pause; forward timeout 500 ms.
+- Hypothesis (written before the run):
+
+| Metric | Value |
+|---|---|
+| Achieved req/s | 300.0 |
+| DB queries/s | 90.6 |
+| p50 / p95 / p99 (ms) | 0.56 / 3.90 / 501.21 |
+| Max (ms) | 505.5 |
+| Error % | 0.000 |
+| Pool pending (max) | 24 |
+| Dropped (measured; warmup) | 0; 0 |
+| Owner forwards ok / fallback | 3197 / 305 |
+
+- What happened vs the hypothesis:
+- Next change:
+
+### 2026-10-25 — staleness under concurrent writes, healthy and with a paused node (benchmark plan step 6)
+- Commit: ce34e77
+- Mode: distributed; TARGET=cluster as in step 4, k6 through nginx
+- Load: `staleness.js`, RATE=300, WRITE_RATE=5, DURATION=60s, WARMUP=30s, SEED=1, MAX_ID=1000000.
+  Reseeded before each run. The pollers add GETs on top of RATE (server GET req/s in the window: 1112.7
+  healthy, 1047.8 fault).
+- Fault pass: `docker pause hotshield-node-b-1` at measured+20s for 5s; the poller saw node-b down from
+  +20.1 s to +24.4 s.
+- Config: `HOTSHIELD_CACHE_TTL=10m`, so only invalidation removes a stale copy.
+- Hypothesis (written before the run):
+
+| Metric | healthy | node-b paused 5 s |
+|---|---|---|
+| Achieved req/s (measured reads) | 300.0 | 300.0 |
+| DB queries/s | 5.1 | 5.0 |
+| p50 / p95 / p99 (ms) | 0.44 / 0.89 / 2.40 | 0.45 / 1.27 / 4080.98 |
+| Max (ms) | 26.7 | 5000.4 |
+| Error % | 0.000 | 0.022 |
+| Owner forwards ok / fallback | 600 / 0 | 562 / 8 |
+| staleness_ms p50 / p95 / p99 / max | 0.0 / 0.0 / 0.0 / 0.0 | 0.0 / 0.0 / 0.0 / 4120.0 |
+| staleness_from_sent_ms p50 / p95 / p99 / max | 6.0 / 13.1 / 21.0 / 32.0 | 6.0 / 504.0 / 2615.1 / 4625.0 |
+| stale_reads / poll_reads | 0 / 49200 | 2 / 45574 |
+
+- Fault pass: k6 exited 99 because the `write` scenario dropped 9 of its scheduled PUTs while node-b was
+  paused; the measured reads dropped none. 4 of 27001 checks failed (`status 200`).
+- What happened vs the hypothesis:
+- Next change:
