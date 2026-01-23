@@ -259,3 +259,47 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
 - Every run dropped iterations, so none is a valid comparison. The poller could not reach the nodes for
   the first 15–25 s of each run (into the measured phase): one CPU per JVM compiles slowly, and a 15 s warmup
   wasn't enough. Step 4 is repeated at a lower rate with WARMUP=30s.
+
+### 2026-10-25 — herd, cache vs coalesce (benchmark plan step 3)
+- Commit: d55f9e5
+- Mode: cache, coalesce
+- Environment: the EC2 VM from the step 1 entry. Both runs passed the gate.
+- Load: `herd.js`, RATE=300, DURATION=60s, WARMUP=15s, SEED=1, MAX_ID=1000000, HERD_AT=20s, FLASH_ID=42,
+  FLASH_SHARE=0.5, BURST_VUS=200, BURST_DELAY=10ms; 20 PUTs to id 43 during the warmup. Reseeded before
+  each run.
+- Config: `HOTSHIELD_CACHE_TTL=10m`, `HOTSHIELD_DB_DELAY=50ms`, DB pool size 10, app restarted before every run.
+- Hypothesis (written before the run):
+
+| Metric | cache | coalesce |
+|---|---|---|
+| Achieved req/s | 300.0 | 300.0 |
+| DB queries/s (whole measured phase) | 53.8 | 50.4 |
+| p50 / p95 / p99 (ms) | 0.54 / 52.13 / 52.93 | 0.56 / 52.21 / 52.81 |
+| Error % | 0.000 | 0.000 |
+| k6 dropped_iterations | 0 | 0 |
+| PUT latency (ms) | 3.6 | 4.8 |
+| Queries from PUT to PUT+1s | 152 | 63 |
+| Burst reads, p50 / p99 (ms) | 200, 557.6 / 1064.8 | 200, 51.8 / 55.8 |
+
+findById queries per 200 ms poller sample around the PUT (t=0 is the PUT):
+
+| t (s) | cache | | t (s) | coalesce |
+|---|---|---|---|---|
+| -0.6 | 9 | | -0.6 | 11 |
+| -0.4 | 12 | | -0.4 | 11 |
+| -0.2 | 13 | | -0.2 | 13 |
+| -0.0 | 15 | | +0.0 | 15 |
+| +0.2 | 32 | | +0.2 | 8 |
+| +0.4 | 40 | | +0.4 | 12 |
+| +0.6 | 40 | | +0.6 | 12 |
+| +0.8 | 40 | | +0.9 | 16 |
+| +1.0 | 40 | | +1.1 | 4 |
+| +1.2 | 41 | | +1.3 | 15 |
+| +1.4 | 40 | | +1.5 | 13 |
+| +1.6 | 27 | | +1.7 | 10 |
+| +1.8 | 10 | | +1.9 | 13 |
+
+- The PUT returned in under BURST_DELAY in both runs, so the burst landed in the miss window.
+- 40 queries per 200 ms is 200 queries/s, which is 10 pool connections each holding one 50 ms query.
+- What happened vs the hypothesis:
+- Next change:
