@@ -225,3 +225,37 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
   cache one `DB_DELAY` (20 ms) later; the burst fired 50 ms after the PUT started, so it found 42 cached
   again. These runs don't test coalescing. The setup was changed (DB_DELAY=50ms, BURST_DELAY=10ms, PUT
   latency now reported) and the runs repeated; see the next herd entry.
+
+### 2026-10-25 — herd, second attempt: the PUT was slower than the burst delay (benchmark plan step 3)
+- Commit: 84a3e57
+- Same as the first attempt except `HOTSHIELD_DB_DELAY=50ms` and BURST_DELAY=10ms. Reseeded before each run.
+
+| Metric | cache | coalesce |
+|---|---|---|
+| Achieved req/s | 300.0 | 300.0 |
+| DB queries/s | 50.6 | 50.3 |
+| p50 / p95 / p99 (ms) | 0.54 / 52.07 / 52.64 | 0.54 / 52.18 / 52.81 |
+| Error % | 0.000 | 0.000 |
+| Queries from PUT to PUT+1s | 68 | 59 |
+| PUT latency (ms) | 25.1 | 26.9 |
+| Burst reads, p50 / p99 (ms) | 200, 6.1 / 12.7 | 200, 6.6 / 9.1 |
+
+- Still no herd. The PUT took 25–27 ms, longer than BURST_DELAY, so the burst read 42 before the PUT
+  invalidated it. The warmup sends only GETs, so this PUT was the JVM's first. `herd.js` now sends 20 PUTs
+  to FLASH_ID+1 during the warmup (commit d55f9e5).
+
+### 2026-10-25 — cluster at RATE=3000 with 1 vCPU per node: overloaded (benchmark plan step 4)
+- Commit: 84a3e57
+- Mode: coalesce, distributed; TARGET=cluster (three nodes behind nginx, each `cpus: 1`, `mem_limit: 2g`)
+- Load: RATE=3000, DURATION=60s, WARMUP=15s, SEED=1, MAX_ID=1000000. Reseeded before the first run.
+
+| Scenario | Mode | Achieved req/s | p50 / p95 / p99 (ms) | Error % | Dropped | Pool pending (max) | Forwards ok / fallback |
+|---|---|---|---|---|---|---|---|
+| zipf | coalesce | 3000.0 | 0.39 / 1167.90 / 4998.51 | 7.655 | 8424 | 899 | – |
+| zipf | distributed | 2256.8 | 230.40 / 4877.42 / 5433.64 | 30.090 | 61962 | 1913 | 15094 / 12873 |
+| flash | coalesce | 3000.0 | 0.32 / 398.18 / 4999.91 | 2.783 | 1180 | 513 | – |
+| flash | distributed | 2787.5 | 144.35 / 4720.07 / 5190.18 | 24.841 | 22809 | 615 | 10442 / 7920 |
+
+- Every run dropped iterations, so none is a valid comparison. The poller could not reach the nodes for
+  the first 15–25 s of each run (into the measured phase): one CPU per JVM compiles slowly, and a 15 s warmup
+  wasn't enough. Step 4 is repeated at a lower rate with WARMUP=30s.
