@@ -85,7 +85,10 @@ def main(out):
     k6_reqs = metric(summary, 'http_reqs{scenario:measured}').get('count', 0)
     latency = metric(summary, 'http_req_duration{scenario:measured}')
     failed = metric(summary, 'http_req_failed{scenario:measured}').get('value', 0)
-    dropped = metric(summary, 'dropped_iterations').get('count', 0)
+    # The warmup is discarded, so only measured drops break open loop; warmup drops (a cold JVM) are listed
+    # beside them because k6's exit code counts both.
+    dropped = metric(summary, 'dropped_iterations{scenario:measured}').get('count', 0)
+    warmup_dropped = metric(summary, 'dropped_iterations{scenario:warmup}').get('count', 0)
     # Server-side GETs in the window, from every scenario: herd's burst and staleness' pollers read too, and
     # their misses are in the query counter, so they belong in the denominator.
     gets = delta(rows, 'gets', start, end)
@@ -132,7 +135,7 @@ def main(out):
         # forwarded miss is looked up on two nodes. Use the row above for that.
         print(f"| Cache hit % per lookup | {100 * hits / (hits + misses):.2f} |")
     print(f"| Pool pending (max) | {pending:.0f} |")
-    print(f"| k6 dropped_iterations | {dropped} |")
+    print(f"| k6 dropped_iterations (measured; warmup) | {dropped}; {warmup_dropped} |")
     print(f"| pg_stat_statements findById calls (whole run) | {(out / 'pgss.txt').read_text().strip()} |")
     forwards = delta(rows, 'forward_ok', start, end), delta(rows, 'forward_fallback', start, end)
     if any(forwards):
