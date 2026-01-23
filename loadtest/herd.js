@@ -32,6 +32,16 @@ if (seconds(HERD_AT) >= seconds(DURATION)) {
 }
 
 export const options = buildOptions({
+  // The warmup only reads, so the measured PUT was the JVM's first: about 25 ms of class loading and JIT,
+  // longer than BURST_DELAY, so the burst read the old cached row. Warm the PUT path on another id.
+  warmput: {
+    executor: 'shared-iterations',
+    exec: 'warmPut',
+    vus: 1,
+    iterations: 20,
+    startTime: `${(seconds(WARMUP) / 2).toFixed(3)}s`,
+    maxDuration: '10s',
+  },
   invalidate: {
     executor: 'shared-iterations',
     exec: 'invalidate',
@@ -68,6 +78,11 @@ export function invalidate() {
   const body = JSON.stringify({ name: `item ${FLASH_ID} herd`, priceCents: 4200, stock: 42 });
   const res = http.put(`${BASE_URL}/items/${FLASH_ID}`, body, WRITE_TAGS);
   check(res, { 'status 200': (r) => r.status === 200 });
+}
+
+export function warmPut() {
+  const body = JSON.stringify({ name: `item ${FLASH_ID + 1} warm`, priceCents: 4300, stock: 43 });
+  http.put(`${BASE_URL}/items/${FLASH_ID + 1}`, body, WRITE_TAGS);
 }
 
 export function burst() {
