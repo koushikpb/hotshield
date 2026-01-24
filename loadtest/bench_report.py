@@ -89,6 +89,8 @@ def main(out):
     # beside them because k6's exit code counts both.
     dropped = metric(summary, 'dropped_iterations{scenario:measured}').get('count', 0)
     warmup_dropped = metric(summary, 'dropped_iterations{scenario:warmup}').get('count', 0)
+    # Scenarios such as staleness.js' writers can drop too; they aren't the measured reads but k6 fails on them.
+    other_dropped = metric(summary, 'dropped_iterations').get('count', 0) - dropped - warmup_dropped
     # Server-side GETs in the window, from every scenario: herd's burst and staleness' pollers read too, and
     # their misses are in the query counter, so they belong in the denominator.
     gets = delta(rows, 'gets', start, end)
@@ -136,6 +138,8 @@ def main(out):
         print(f"| Cache hit % per lookup | {100 * hits / (hits + misses):.2f} |")
     print(f"| Pool pending (max) | {pending:.0f} |")
     print(f"| k6 dropped_iterations (measured; warmup) | {dropped}; {warmup_dropped} |")
+    if other_dropped:
+        print(f"| k6 dropped_iterations in other scenarios | {other_dropped} |")
     print(f"| pg_stat_statements findById calls (whole run) | {(out / 'pgss.txt').read_text().strip()} |")
     forwards = delta(rows, 'forward_ok', start, end), delta(rows, 'forward_fallback', start, end)
     if any(forwards):
@@ -161,7 +165,8 @@ def herd(m, summary, rows, start):
         print(f"| {row['t'] - put_at:+.1f} | {row.get('findById', 0) - previous.get('findById', 0):.0f} |")
     print()
     print(f"- Queries from PUT to PUT+1s: {delta(rows, 'findById', put_at, put_at + 1):.0f}")
-    print(f"- PUT latency: {put.get('max', 0):.1f} ms (BURST_DELAY={k6_env(m, 'BURST_DELAY', '50ms')})")
+    put_ms = f"{put['max']:.1f} ms" if 'max' in put else 'n/a (not in this summary)'
+    print(f"- PUT latency: {put_ms} (BURST_DELAY={k6_env(m, 'BURST_DELAY', '10ms')})")
     print(f"- Burst reads: {metric(summary, 'http_reqs{scenario:burst}').get('count', 0)}, "
           f"p50/p99 {burst.get('p(50)', 0):.1f} / {burst.get('p(99)', 0):.1f} ms")
 
