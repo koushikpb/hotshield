@@ -4,7 +4,6 @@ A distributed load shield for PostgreSQL under hot-key traffic. Concurrent cache
 coalesced into one query, popular keys are owned by one node in a small cluster via rendezvous hashing, and writes
 invalidate cached copies. Terraform for AWS (ECS Fargate, RDS, ALB), traced with OpenTelemetry.
 
-
 ```mermaid
 flowchart LR
     client[k6] --> lb[nginx locally / ALB on AWS]
@@ -28,7 +27,7 @@ experiment runs the same code.
 ## Results
 
 One EC2 `c7i.2xlarge` (8 vCPU) runs k6, the app and PostgreSQL 16, open-loop load, 60 s measured after a
-discarded warmup, 0 dropped iterations in every row.
+discarded warmup, 0 dropped iterations in every measured phase. Each row is a single run.
 
 Zipf(1.1) reads over 1M rows, one node, 3000 req/s:
 
@@ -43,7 +42,7 @@ Thundering herd: a PUT drops the hot key, then 200 reads of it arrive together (
 | Mode | Queries in the second after the PUT | Burst p50 / p99 (ms) |
 |---|---|---|
 | Cache only | 152 | 557.6 / 1064.8 |
-| Cache + coalescing | 63 (the normal rate) | 51.8 / 55.8 |
+| Cache + coalescing | 63 (the run averaged 50.4 per second) | 51.8 / 55.8 |
 
 Three nodes (1 vCPU each) behind nginx, zipf, 1000 req/s:
 
