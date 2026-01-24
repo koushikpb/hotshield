@@ -4,7 +4,7 @@
 #
 #   loadtest/bench.sh NAME MODE SCENARIO RATE
 #   loadtest/bench.sh zipf-direct-800 direct zipf.js 800
-#   APP_ENV="HOTSHIELD_CACHE_TTL=10m HOTSHIELD_DB_DELAY=20ms" loadtest/bench.sh herd-coalesce coalesce herd.js 300
+#   APP_ENV="HOTSHIELD_CACHE_TTL=10m HOTSHIELD_DB_DELAY=50ms" loadtest/bench.sh herd-coalesce coalesce herd.js 300
 #   TARGET=cluster loadtest/bench.sh zipf-dist-800 distributed zipf.js 800
 #
 # TARGET=single runs build/libs/app.jar on the host (:8080). TARGET=cluster recreates the three compose nodes;

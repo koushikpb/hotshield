@@ -9,7 +9,7 @@
 // PUT's response, so a slow PUT can push the invalidation past the burst; check the PUT's latency
 // in the summary.
 // Run the app with HOTSHIELD_CACHE_TTL and HOTSHIELD_DB_DELAY set as described in README.md.
-// k6 run -e RATE=500 -e DURATION=60s -e SEED=1 -e HERD_AT=20s loadtest/herd.js
+// k6 run -e RATE=300 -e DURATION=60s -e SEED=1 -e HERD_AT=20s -e BURST_DELAY=10ms loadtest/herd.js
 import http from 'k6/http';
 import { check } from 'k6';
 import {
@@ -22,7 +22,7 @@ const FLASH_ID = Number(__ENV.FLASH_ID || 42);
 const FLASH_SHARE = Number(__ENV.FLASH_SHARE || 0.5);
 const HERD_AT = __ENV.HERD_AT || '20s';
 const BURST_VUS = Number(__ENV.BURST_VUS || 200);
-const BURST_DELAY = __ENV.BURST_DELAY || '50ms';
+const BURST_DELAY = __ENV.BURST_DELAY || '10ms';
 const BURST_TAGS = { ...READ_TAGS, tags: { name: 'GET /items/{id} burst' } };
 const putAt = seconds(WARMUP) + seconds(HERD_AT);
 const zipfId = zipfSampler();
@@ -82,7 +82,8 @@ export function invalidate() {
 
 export function warmPut() {
   const body = JSON.stringify({ name: `item ${FLASH_ID + 1} warm`, priceCents: 4300, stock: 43 });
-  http.put(`${BASE_URL}/items/${FLASH_ID + 1}`, body, WRITE_TAGS);
+  const res = http.put(`${BASE_URL}/items/${FLASH_ID + 1}`, body, WRITE_TAGS);
+  check(res, { 'status 200': (r) => r.status === 200 });
 }
 
 export function burst() {

@@ -78,7 +78,7 @@ kill %1
 | `WRITE_SHARE` | `0.05` | mixed |
 | `HERD_AT` | `20s` | herd, offset of the PUT into the measured phase (must be < `DURATION`) |
 | `BURST_VUS` | `200` | herd, reads of the flash id fired together after the PUT |
-| `BURST_DELAY` | `50ms` | herd, how long after the PUT starts the burst fires |
+| `BURST_DELAY` | `10ms` | herd, how long after the PUT starts the burst fires |
 
 ## Rules
 
@@ -136,10 +136,9 @@ every run, so no separate warmup pass is needed.
    `direct`, `cache` and `coalesce`: `loadtest/bench.sh <scenario>-<mode> <mode> <scenario>.js $RATE`.
    Run `direct` first for each scenario: uniform reads colder pages than zipf, so direct may not hold
    `$RATE` there. If it drops iterations, rerun all three modes of that scenario at a lower rate.
-3. **Herd (milestone 4).** `APP_ENV="HOTSHIELD_CACHE_TTL=10m HOTSHIELD_DB_DELAY=50ms" RESEED=1
-   K6_ENV="-e BURST_DELAY=10ms"` with `herd.js` at 300 req/s, in `cache` and `coalesce`. Not `direct`:
+3. **Herd (milestone 4).** `APP_ENV="HOTSHIELD_CACHE_TTL=10m HOTSHIELD_DB_DELAY=50ms" RESEED=1` with `herd.js` at 300 req/s, in `cache` and `coalesce`. Not `direct`:
    without a cache there is no herd, every read is already a query. The burst has to land between the PUT
-   returning and the refill finishing, a window about one `DB_DELAY` long. With 20ms and the default
+   returning and the refill finishing, a window about one `DB_DELAY` long. With 20ms and a
    50ms `BURST_DELAY` the key was already back in the cache when the burst fired. Check the printed PUT
    latency is under `BURST_DELAY`. Don't raise `DB_DELAY` much further: at 200ms the ordinary misses
    alone keep all 10 pool connections busy.
