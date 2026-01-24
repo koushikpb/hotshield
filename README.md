@@ -4,7 +4,6 @@ A distributed load shield for PostgreSQL under hot-key traffic. Concurrent cache
 coalesced into one query, popular keys are owned by one node in a small cluster via rendezvous hashing, and writes
 invalidate cached copies. Terraform for AWS (ECS Fargate, RDS, ALB), traced with OpenTelemetry.
 
-> Work in progress. Results below get filled in from real benchmark runs.
 
 ```mermaid
 flowchart LR
@@ -28,15 +27,33 @@ experiment runs the same code.
 
 ## Results
 
-| Mode | DB queries/s | p50 | p99 | Error % |
-|---|---|---|---|---|
-| Direct PostgreSQL | | | | |
-| Cache only | | | | |
-| Cache + coalescing | | | | |
-| Distributed | | | | |
+One EC2 `c7i.2xlarge` (8 vCPU) runs k6, the app and PostgreSQL 16, open-loop load, 60 s measured after a
+discarded warmup, 0 dropped iterations in every row.
 
-Every run is logged in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md); the run plan is in
-[loadtest/README.md](loadtest/README.md).
+Zipf(1.1) reads over 1M rows, one node, 3000 req/s:
+
+| Mode | DB queries/s | DB queries per request | p50 (ms) | p99 (ms) | Error % |
+|---|---|---|---|---|---|
+| Direct PostgreSQL | 3008.1 | 1.0000 | 0.34 | 1.69 | 0.000 |
+| Cache only | 674.8 | 0.2251 | 0.22 | 1.29 | 0.000 |
+| Cache + coalescing | 674.7 | 0.2250 | 0.22 | 1.18 | 0.000 |
+
+Thundering herd: a PUT drops the hot key, then 200 reads of it arrive together (50 ms artificial DB delay):
+
+| Mode | Queries in the second after the PUT | Burst p50 / p99 (ms) |
+|---|---|---|
+| Cache only | 152 | 557.6 / 1064.8 |
+| Cache + coalescing | 63 (the normal rate) | 51.8 / 55.8 |
+
+Three nodes (1 vCPU each) behind nginx, zipf, 1000 req/s:
+
+| Mode | DB queries/s | DB queries per request | p50 (ms) | p99 (ms) | Error % |
+|---|---|---|---|---|---|
+| Three independent caches | 346.5 | 0.3464 | 0.48 | 2.60 | 0.000 |
+| Distributed (one owner per key) | 279.2 | 0.2794 | 0.37 | 13.64 | 0.000 |
+
+Every run, including the ones that failed and why, is logged in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md);
+the run plan is in [loadtest/README.md](loadtest/README.md).
 
 ## Running locally
 
