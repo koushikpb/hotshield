@@ -126,13 +126,13 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
 - Config: DB pool size 10, app restarted before every run, tracing off.
 - Hypothesis (written before the run):
 
-| RATE | Achieved req/s | DB queries/s | p50 / p95 / p99 (ms) | Max (ms) | Error % | Pool pending (max) | Dropped |
+| RATE | Achieved req/s | DB queries/s | p50 / p95 / p99 (ms) | Max (ms) | Error % | Pool pending (max) | Dropped (measured; warmup) |
 |---|---|---|---|---|---|---|---|
-| 500 | 500.0 | 499.6 | 0.88 / 1.54 / 4.11 | 24.2 | 0.000 | 0 | 0 |
-| 750 | 750.0 | 750.9 | 0.75 / 1.54 / 5.07 | 81.6 | 0.000 | 0 | 0 |
-| 1000 | 990.7 | 918.1 | 0.70 / 1967.88 / 2873.90 | 3870.0 | 4.620 | 1848 | 559 |
-| 1500 | 1061.0 | 686.1 | 132.15 / 2435.24 / 2756.25 | 6199.1 | 37.051 | 2144 | 25542 |
-| 2000 | 912.0 | 880.1 | 724.76 / 1833.20 / 2473.30 | 4552.1 | 4.161 | 779 | 41513 |
+| 500 | 500.0 | 499.6 | 0.88 / 1.54 / 4.11 | 24.2 | 0.000 | 0 | 0; 0 |
+| 750 | 750.0 | 750.9 | 0.75 / 1.54 / 5.07 | 81.6 | 0.000 | 0 | 0; 0 |
+| 1000 | 990.7 | 918.1 | 0.70 / 1967.88 / 2873.90 | 3870.0 | 4.620 | 1848 | 559; 0 |
+| 1500 | 1061.0 | 686.1 | 132.15 / 2435.24 / 2756.25 | 6199.1 | 37.051 | 2144 | 16711; 8831 |
+| 2000 | 912.0 | 880.1 | 724.76 / 1833.20 / 2473.30 | 4552.1 | 4.161 | 779 | 25573; 15940 |
 
 - The full bench.sh blocks are in `loadtest/results/cap-direct-<rate>/report.md` (not committed).
 - 750 was probed after the planned four, because 500 left direct mode at a 4 ms p99. At 750 the poller
@@ -155,17 +155,17 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
 - Config: DB pool size 10, app restarted before every run, tracing off.
 - Hypothesis (written before the run):
 
-| RATE | Achieved req/s | DB queries/s | p50 / p95 / p99 (ms) | Max (ms) | Error % | Pool pending (max) | Dropped |
+| RATE | Achieved req/s | DB queries/s | p50 / p95 / p99 (ms) | Max (ms) | Error % | Pool pending (max) | Dropped (measured; warmup) |
 |---|---|---|---|---|---|---|---|
-| 1000 | 1000.0 | 1000.5 | 0.56 / 1.11 / 1.68 | 37.2 | 0.000 | 0 | 0 |
-| 2000 | 2000.0 | 1999.8 | 0.41 / 0.84 / 1.64 | 76.9 | 0.000 | 89 | 0 |
-| 3000 | 3000.0 | 2996.2 | 0.34 / 0.74 / 1.74 | 21.9 | 0.000 | 0 | 0 |
-| 4000 | 4000.0 | not sampled | 0.35 / 0.75 / 3.81 | 5008.0 | 6.375 | not sampled | 2434 |
+| 1000 | 1000.0 | 1000.5 | 0.56 / 1.11 / 1.68 | 37.2 | 0.000 | 0 | 0; 0 |
+| 2000 | 2000.0 | 1999.8 | 0.41 / 0.84 / 1.64 | 76.9 | 0.000 | 89 | 0; 0 |
+| 3000 | 3000.0 | 2996.2 | 0.34 / 0.74 / 1.74 | 21.9 | 0.000 | 0 | 0; 0 |
+| 4000 | 4000.0 | not sampled | 0.35 / 0.75 / 3.81 | 5008.0 | 6.375 | not sampled | 0; 2434 |
 
 - At 4000 the poller could not reach the app for the whole measured window, so the server-side rows are
   missing. From the app log and the kernel counters of that run: Hikari's 10 connections were all busy,
-  up to 8,111 requests waited for one, and 14,914 gave up after the 2 s `connection-timeout`
-  (`SQLTransientConnectionException`). `TcpExtListenDrops` was 167,773: the accept queue overflowed, so
+  up to 8,173 requests waited for one, and 14,914 gave up after the 2 s `connection-timeout`
+  (`SQLTransientConnectionException`). `TcpExtListenDrops` was 167,773 (read with `nstat` on the VM after the run, not saved): the accept queue overflowed, so
   some connections were never accepted and k6 hit its 5 s timeout. The median stayed at 0.35 ms throughout.
 - `RATE` for steps 2 and 4: 3000.
 - What happened vs the hypothesis:
@@ -199,7 +199,7 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
   It is lower in coalesce mode because the leader looks the key up a second time before it loads.
 - pg_stat_statements findById calls (whole run, warmup included): uniform 224275 / 208667 / 207770,
   zipf 224119 / 53424 / 53247, flash 223916 / 30811 / 30717 (direct / cache / coalesce).
-- The full bench.sh blocks are in `loadtest/results/<scenario>-<mode>-3000/report.md` on the VM (not committed).
+- The full bench.sh blocks are in `loadtest/results/vm/<scenario>-<mode>-3000/report.md`, copied from the VM (not committed).
 - What happened vs the hypothesis:
 - Next change:
 
@@ -249,16 +249,17 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
 - Mode: coalesce, distributed; TARGET=cluster (three nodes behind nginx, each `cpus: 1`, `mem_limit: 2g`)
 - Load: RATE=3000, DURATION=60s, WARMUP=15s, SEED=1, MAX_ID=1000000. Reseeded before the first run.
 
-| Scenario | Mode | Achieved req/s | p50 / p95 / p99 (ms) | Error % | Dropped | Pool pending (max) | Forwards ok / fallback |
+| Scenario | Mode | Achieved req/s | p50 / p95 / p99 (ms) | Error % | Dropped (measured; warmup) | Pool pending (max) | Forwards ok / fallback |
 |---|---|---|---|---|---|---|---|
-| zipf | coalesce | 3000.0 | 0.39 / 1167.90 / 4998.51 | 7.655 | 8424 | 899 | – |
-| zipf | distributed | 2256.8 | 230.40 / 4877.42 / 5433.64 | 30.090 | 61962 | 1913 | 15094 / 12873 |
-| flash | coalesce | 3000.0 | 0.32 / 398.18 / 4999.91 | 2.783 | 1180 | 513 | – |
-| flash | distributed | 2787.5 | 144.35 / 4720.07 / 5190.18 | 24.841 | 22809 | 615 | 10442 / 7920 |
+| zipf | coalesce | 3000.0 | 0.39 / 1167.90 / 4998.51 | 7.655 | 0; 8424 | 899 | – |
+| zipf | distributed | 2256.8 | 230.40 / 4877.42 / 5433.64 | 30.090 | 44595; 17367 | 1913 | 15094 / 12873 |
+| flash | coalesce | 3000.0 | 0.32 / 398.18 / 4999.91 | 2.783 | 0; 1180 | 513 | – |
+| flash | distributed | 2787.5 | 144.35 / 4720.07 / 5190.18 | 24.841 | 12751; 10058 | 615 | 10442 / 7920 |
 
-- Every run dropped iterations, so none is a valid comparison. The poller could not reach the nodes for
-  the first 15–25 s of each run (into the measured phase): one CPU per JVM compiles slowly, and a 15 s warmup
-  wasn't enough. Step 4 is repeated at a lower rate with WARMUP=30s.
+- None is a valid comparison: both distributed runs dropped measured iterations, and all four had over 1%
+  errors. The poller lost one or more nodes from the start of the warmup for 16.6 s (zipf coalesce),
+  17.1 s (flash coalesce), 27.9 s (zipf distributed) and 38.6 s (flash distributed), into the measured
+  phase: one CPU per JVM compiles slowly, and a 15 s warmup wasn't enough. Step 4 is repeated at a lower rate with WARMUP=30s.
 
 ### 2026-10-25 — herd, cache vs coalesce (benchmark plan step 3)
 - Commit: d55f9e5
@@ -311,7 +312,7 @@ findById queries per 200 ms poller sample around the PUT (t=0 is the PUT):
   `mem_limit: 2g` each, nginx in front. Every run passed the gate.
 - Load: RATE=1000, DURATION=60s, WARMUP=30s, SEED=1, MAX_ID=1000000. Reseeded before the first run.
   RATE is 1000, not the single-node 3000: with 1 vCPU per node, distributed zipf held 1000 with 0 measured
-  drops and 0 errors, and failed at 1500 (20.538% errors, 4008 measured drops; `cap-cluster-dist-1500`).
+  drops and 0 errors, and failed at 1500 (20.538% errors; its 4008 drops were all in the warmup; `cap-cluster-dist-1500`).
   WARMUP is 30s because one CPU per JVM compiles slowly; drops during the warmup are listed separately.
 - Config: DB pool size 10 per node, `HOTSHIELD_CACHE_TTL` 30s, nodes recreated before every run, tracing off.
 - Hypothesis (written before the run):
