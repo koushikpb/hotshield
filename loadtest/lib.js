@@ -25,9 +25,12 @@ export const WRITE_TAGS = {
 
 // Open loop: requests start on schedule even when responses are slow, so latency isn't hidden
 // by the generator waiting (coordinated omission).
-// VUs scale with RATE: by Little's law in-flight requests are RATE * latency, so a fixed pool
-// that fits 200 req/s starts dropping iterations at higher rates. maxVUs covers RATE * 5s, the
-// worst case where every request runs into the timeout.
+// VUs scale with RATE: by Little's law in-flight requests are RATE * latency. Preallocate for
+// 100 ms and let k6 add VUs when they are busy. Each VU keeps its own connection, and k6 rotates
+// through all of them, so RATE * 2.5 VUs meant 10,000 open connections at 4000 req/s: above
+// Tomcat's max-connections (8192), and the extra connections hung until the 5 s timeout. maxVUs
+// stays under that limit, so a slow server shows up as dropped iterations, not as timeouts that
+// look like app failures.
 function arrivals(duration, startTime, extra = {}) {
   return {
     executor: 'constant-arrival-rate',
@@ -35,8 +38,8 @@ function arrivals(duration, startTime, extra = {}) {
     timeUnit: '1s',
     duration,
     startTime,
-    preAllocatedVUs: Math.ceil(RATE * 2.5),
-    maxVUs: Math.ceil(RATE * 5),
+    preAllocatedVUs: Math.ceil(RATE * 0.1),
+    maxVUs: Math.min(Math.ceil(RATE * 5), 8000),
     ...extra,
   };
 }
