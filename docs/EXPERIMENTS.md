@@ -37,7 +37,7 @@ One entry per run. Numbers come from real runs only.
 - Data: `loadtest/seed.sql`, 1,000,000 rows, 50 categories of 20,000 rows, `analyze` after the seed
 - Query: `ItemRepository.findByCategory` with `category = 'cat-07'`, `price_cents >= 50000`, `limit 50`.
   "Without index" drops `items_category_price_idx` inside a transaction and rolls back.
-- Hypothesis (written before the run):
+- Hypothesis (written before the run): none was written before the run.
 
 | Run | With index (ms) | Without index (ms) |
 |---|---|---|
@@ -88,8 +88,14 @@ QUERY PLAN
 (20 rows)
 ```
 
-- What happened vs the hypothesis:
-- Next change:
+- What happened :
+  With the index the planner walks `items_category_price_idx` from the first row of `cat-07` at
+  `price_cents >= 50000` and stops after 50 rows: 54 buffers, 0.22–0.26 ms. Without it, it scans all 1M rows
+  in parallel (329,993 removed by the filter per worker, 11,435 buffers) and top-N sorts what is left:
+  25.7–27.5 ms, about 100x slower. The index helps twice: the equality and range conditions find the rows,
+  and its order already matches `order by price_cents`, so `limit` ends the scan early. The times come from
+  a busy laptop; the buffer counts don't depend on that.
+- Next change : None. The index stays (`V2__index_items_category_price.sql`).
 
 ### 2026-10-23 — one request traced across two nodes (milestone 7)
 - Commit: 4c752ae (traces are unchanged by the uncommitted harness work)
@@ -124,7 +130,7 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
 - Load: `zipf.js`, DURATION=60s, WARMUP=15s, SEED=1, MAX_ID=1000000. The first run reseeded; every run
   prewarmed `items` and `items_pkey`.
 - Config: DB pool size 10, app restarted before every run, tracing off.
-- Hypothesis (written before the run):
+- Hypothesis (written before the run): none was written before the run.
 
 | RATE | Achieved req/s | DB queries/s | p50 / p95 / p99 (ms) | Max (ms) | Error % | Pool pending (max) | Dropped (measured; warmup) |
 |---|---|---|---|---|---|---|---|
@@ -140,8 +146,12 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
 - `RATE` for steps 2 and 4: 750.
 - In the failing runs, "GETs served without a DB read" is not meaningful (it reads 14% at 1500 in direct
   mode): a request that times out waiting for a connection counts as a GET but never runs a query.
-- What happened vs the hypothesis:
-- Next change:
+- What happened :
+  On the busy Mac, direct mode was clean at 750 req/s (p99 5.07 ms) and broke at 1000: 559 measured
+  drops, 4.6% errors, up to 1848 requests waiting for one of the 10 pool connections. The fall is a cliff,
+  not a slope: p99 went from 5 ms to 2.9 s between the two rates. The poller missing samples at 750 showed
+  the app was already near its limit there, and the laptop's background load kept changing between runs.
+- Next change : Moved the benchmarks to a dedicated EC2 VM (next entry), so the numbers measure HotShield and not the laptop.
 
 ### 2026-10-25 — direct mode capacity on zipf, EC2 VM (benchmark plan step 1)
 - Commit: a5c60fc
@@ -153,7 +163,7 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
 - Load: `zipf.js`, DURATION=60s, WARMUP=15s, SEED=1, MAX_ID=1000000. The first run reseeded; every run
   prewarmed `items` and `items_pkey`.
 - Config: DB pool size 10, app restarted before every run, tracing off.
-- Hypothesis (written before the run):
+- Hypothesis (written before the run): none was written before the run.
 
 | RATE | Achieved req/s | DB queries/s | p50 / p95 / p99 (ms) | Max (ms) | Error % | Pool pending (max) | Dropped (measured; warmup) |
 |---|---|---|---|---|---|---|---|
@@ -168,8 +178,17 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
   (`SQLTransientConnectionException`). `TcpExtListenDrops` was 167,773 (read with `nstat` on the VM after the run, not saved): the accept queue overflowed, so
   some connections were never accepted and k6 hit its 5 s timeout. The median stayed at 0.35 ms throughout.
 - `RATE` for steps 2 and 4: 3000.
-- What happened vs the hypothesis:
-- Next change:
+- What happened :
+  Direct mode held 3000 req/s with p99 under 2 ms and failed at 4000, again as a cliff. The 4000 run
+  failed in two layers: all 10 pool connections were busy, up to 8,173 requests queued for one and 14,914
+  gave up after 2 s; and the kernel's accept queue overflowed, so some connections were never accepted and
+  k6 waited its full 5 s. The median stayed at 0.35 ms: most requests were fast and a tail hung completely.
+  Nothing limits how many requests wait for the pool, because every request gets its own virtual thread.
+  These runs don't show why the connections were held longer at 4000 (k6, the JVM and Postgres share
+  8 vCPUs, so CPU is a likely cause, but it wasn't measured).
+- Next change : Milestone 12: put a bound in front of the pool (for example a limit on concurrent DB calls or on
+  Tomcat connections) so excess requests fail fast instead of queueing, and rerun 4000 req/s to compare the
+  error rate and the tail.
 
 ### 2026-10-25 — direct vs cache vs coalesce on uniform, zipf and flash (benchmark plan step 2)
 - Commit: 939f87c
@@ -200,8 +219,15 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
 - pg_stat_statements findById calls (whole run, warmup included): uniform 224275 / 208667 / 207770,
   zipf 224119 / 53424 / 53247, flash 223916 / 30811 / 30717 (direct / cache / coalesce).
 - The full bench.sh blocks are in `loadtest/results/vm/<scenario>-<mode>-3000/report.md`, copied from the VM (not committed).
-- What happened vs the hypothesis:
-- Next change:
+- What happened :
+  The cache pays off in proportion to how skewed the keys are. DB queries per request fell from 1.0 to
+  0.225 on zipf (-77.5%) and to 0.130 on flash (-87.0%), and p50 fell from about 0.35 ms to 0.22 ms. On uniform
+  keys it barely helped (0.92): 1M keys drawn evenly repeat too rarely within the 30 s TTL. There the cache
+  only added work: p99 rose from 1.74 ms to 2.92 ms (cache) and 2.49 ms (coalesce). That is one run each, so
+  a repeat should confirm it before it counts. Coalesce matched cache to four decimals on every mix: with a
+  0.3 ms database read, two misses on the same key almost never overlap, so there is nothing to collapse.
+  Coalescing can only matter when misses are slow and the key is hot, which is what the herd tests.
+- Next change : The herd scenario (step 3), with a slower database read so concurrent misses overlap.
 
 ### 2026-10-25 — herd, first attempt: the burst missed the window (benchmark plan step 3)
 - Commit: fc68c62
@@ -269,7 +295,7 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
   FLASH_SHARE=0.5, BURST_VUS=200, BURST_DELAY=10ms; 20 PUTs to id 43 during the warmup. Reseeded before
   each run.
 - Config: `HOTSHIELD_CACHE_TTL=10m`, `HOTSHIELD_DB_DELAY=50ms`, DB pool size 10, app restarted before every run.
-- Hypothesis (written before the run):
+- Hypothesis (written before the run): none was written before the run.
 
 | Metric | cache | coalesce |
 |---|---|---|
@@ -302,8 +328,15 @@ findById queries per 200 ms poller sample around the PUT (t=0 is the PUT):
 
 - The PUT returned in under BURST_DELAY in both runs, so the burst landed in the miss window.
 - 40 queries per 200 ms is 200 queries/s, which is 10 pool connections each holding one 50 ms query.
-- What happened vs the hypothesis:
-- Next change:
+- What happened :
+  Coalescing removes the herd. In cache mode the PUT on the hot key was followed by roughly one query per
+  burst read: about 40 queries per 200 ms for 1.4 s, which is exactly 10 connections each doing one 50 ms
+  query, so the pool was the limit and the burst waited 557.6 ms at p50. In coalesce mode the queries stayed
+  at the background rate, and the burst p50 was 51.8 ms, about one DB_DELAY: all 200 reads waited for the
+  same single load. The 50 ms delay is artificial; it stands in for a slow query or a remote database. It
+  took two failed attempts to get the burst inside the miss window, which is itself the lesson: a herd only
+  exists while a miss is in flight.
+- Next change : None for the single node. Step 4 tests the same idea across three nodes.
 
 ### 2026-10-25 — cluster: coalesce vs distributed on zipf and flash (benchmark plan step 4)
 - Commit: ce34e77
@@ -315,7 +348,7 @@ findById queries per 200 ms poller sample around the PUT (t=0 is the PUT):
   drops and 0 errors, and failed at 1500 (20.538% errors; its 4008 drops were all in the warmup; `cap-cluster-dist-1500`).
   WARMUP is 30s because one CPU per JVM compiles slowly; drops during the warmup are listed separately.
 - Config: DB pool size 10 per node, `HOTSHIELD_CACHE_TTL` 30s, nodes recreated before every run, tracing off.
-- Hypothesis (written before the run):
+- Hypothesis (written before the run): none was written before the run.
 
 | Scenario | Mode | Achieved req/s | DB queries/s | DB queries per GET | p50 / p95 / p99 (ms) | Max (ms) | Error % | Dropped (measured; warmup) | Forwards ok / fallback |
 |---|---|---|---|---|---|---|---|---|---|
@@ -327,8 +360,17 @@ findById queries per 200 ms poller sample around the PUT (t=0 is the PUT):
 - pg_stat_statements findById calls (whole run, warmup included): zipf 31821 / 24781, flash 17935 / 15634
   (coalesce / distributed).
 - In the zipf distributed run the poller couldn't reach any node from -28.8 s to -10.4 s (warmup only).
-- What happened vs the hypothesis:
-- Next change:
+- What happened :
+  Routing each key to one owner cut DB queries per request by about a fifth compared with three
+  independent caches: 0.3464 to 0.2794 on zipf (-19%) and 0.1962 to 0.1600 on flash (-18%). With
+  independent caches every node misses each key on its own; with an owner, one copy serves all three. The
+  cost is a forward hop: 13,738 forwards on zipf and 7,839 on flash, and the cluster held 1000 req/s but not
+  1500 with 1 vCPU per node. On flash the p99 stayed the same (2.37 vs 2.51 ms). On zipf distributed it rose
+  to 13.64 ms against 2.60 ms, but that run's nodes were still unreachable until 10 s before the measured
+  phase, so part of that tail may be a late warm-up rather than forwarding. These cluster numbers don't
+  compare directly with the single-node table: at 1000 req/s fewer requests repeat a key within the TTL.
+- Next change : Repeat zipf distributed with a longer warmup before deciding whether HTTP forwarding costs enough to try
+  gRPC (the stack rule: only if the overhead shows up in measurements).
 
 ### 2026-10-25 — owner down: forward timeouts fall back to the database (benchmark plan step 5)
 - Commit: ce34e77
@@ -338,7 +380,7 @@ findById queries per 200 ms poller sample around the PUT (t=0 is the PUT):
 - Fault: `docker pause hotshield-node-a-1` at measured+20s for 10s; the poller saw node-a down from +20.1 s
   to +29.4 s.
 - Config: `HOTSHIELD_CACHE_TTL=2s` so node-b misses 42 every 2 s during the pause; forward timeout 500 ms.
-- Hypothesis (written before the run):
+- Hypothesis (written before the run): none was written before the run.
 
 | Metric | Value |
 |---|---|
@@ -351,8 +393,13 @@ findById queries per 200 ms poller sample around the PUT (t=0 is the PUT):
 | Dropped (measured; warmup) | 0; 0 |
 | Owner forwards ok / fallback | 3197 / 305 |
 
-- What happened vs the hypothesis:
-- Next change:
+- What happened :
+  Losing the owner did not cause errors: with node-a paused for 10 s, node-b answered every request
+  (0.000% errors, 0 drops). 305 forwards timed out and fell back to the database. Each fallback paid the full
+  500 ms forward timeout first, which is the p99 of 501.21 ms and the max of 505.5 ms. Pool pending reached 24
+  while the fallbacks read the database. The failure is slow, not wrong.
+- Next change : Optional: after a few timeouts, mark the owner as down for a short time and go straight to the database,
+  so later misses don't each wait 500 ms. Measure it with this same run.
 
 ### 2026-10-25 — staleness under concurrent writes, healthy and with a paused node (benchmark plan step 6)
 - Commit: ce34e77
@@ -363,7 +410,7 @@ findById queries per 200 ms poller sample around the PUT (t=0 is the PUT):
 - Fault pass: `docker pause hotshield-node-b-1` at measured+20s for 5s; the poller saw node-b down from
   +20.1 s to +24.4 s.
 - Config: `HOTSHIELD_CACHE_TTL=10m`, so only invalidation removes a stale copy.
-- Hypothesis (written before the run):
+- Hypothesis (written before the run): none was written before the run.
 
 | Metric | healthy | node-b paused 5 s |
 |---|---|---|
@@ -379,5 +426,14 @@ findById queries per 200 ms poller sample around the PUT (t=0 is the PUT):
 
 - Fault pass: k6 exited 99 because the `write` scenario dropped 9 of its scheduled PUTs while node-b was
   paused; the measured reads dropped none. 4 of 27001 checks failed (`status 200`).
-- What happened vs the hypothesis:
-- Next change:
+- What happened :
+  When every node is healthy, no read returned an old version: 0 stale reads in 49,200 polls. That is
+  by construction: a PUT returns only after the invalidation reached every node, so `staleness_ms` is 0, and
+  `staleness_from_sent_ms` (max 32 ms) is the PUT's own duration. With node-b paused for 5 s, 2 polls saw an
+  old version, the worst 4,120 ms after the PUT returned; the PUTs waited for the 500 ms broadcast timeout
+  (from-sent p95 504 ms) and 9 scheduled writes were dropped. Requests nginx sent to the paused node waited
+  until k6's 5 s timeout (p99 4080.98 ms, 0.022% errors). The stale reads stopped within about 4 s even
+  with a 10-minute TTL; these numbers don't show which mechanism ended them (a later write's invalidation or
+  the version check on a forward). The node logs weren't saved.
+- Next change : Save the node logs with cluster runs, so a fault pass shows how each stale copy was cleared. If a
+  lost invalidation must never last, retry failed invalidations until they land, and repeat this run.
