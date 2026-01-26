@@ -186,7 +186,8 @@ GET /items/{id} [node-a] 564.7ms {'http.response.status_code': 200, 'url.path': 
   Nothing limits how many requests wait for the pool, because every request gets its own virtual thread.
   These runs don't show why the connections were held longer at 4000 (k6, the JVM and Postgres share
   8 vCPUs, so CPU is a likely cause, but it wasn't measured).
-  Corrected by the milestone 12 entry: the pool was not busy; k6 opened more connections than Tomcat accepts.
+  Corrected in part by the milestone 12 entry: the pool saturated only in the warmup; the measured-phase
+  errors were k6 client timeouts, most likely from more k6 connections than Tomcat accepts.
 - Next change : Milestone 12: put a bound in front of the pool (for example a limit on concurrent DB calls or on
   Tomcat connections) so excess requests fail fast instead of queueing, and rerun 4000 req/s to compare the
   error rate and the tail.
@@ -441,28 +442,42 @@ findById queries per 200 ms poller sample around the PUT (t=0 is the PUT):
 
 ### 2026-10-25 — why direct mode failed at 4000 req/s (milestone 12)
 - Commit: ce34e77 (diagnostic runs), bb78c69 (after runs)
-- Mode: direct, single node; the EC2 VM from step 1; every run passed the gate (load1 under 1.0, 94% free,
-  no swap)
+- Mode: direct, single node; the EC2 VM from step 1; every run passed the gate (load1 under 1.0, 94–95%
+  free, no swap)
 - Load: `zipf.js`, DURATION=60s, WARMUP=15s, SEED=1, MAX_ID=1000000; RATE as in the tables. No reseed;
   every run prewarmed `items` and `items_pkey`.
 - Config: DB pool size 10, Hikari `connection-timeout` 2s, Tomcat defaults (`max-connections` 8192).
 - Hypothesis: none was written before the diagnostic runs. Before the after runs: with the new VU sizing,
   4000 req/s runs with 0 errors.
 
-Diagnostic runs at 4000 req/s, before the change (`diag-direct-4000`, `diag-direct-4000-top`):
+Diagnostic runs at 4000 req/s, before the change. `diag-direct-4000` kept the app running afterwards so its
+metrics could be read; `diag-direct-4000-top` sampled `top -b -d 5` (saved as `top-diag.txt`).
 
-| Measurement | Value | Source |
-|---|---|---|
-| Error % | 6.374; 6.452 | k6, measured scenario |
-| Time a connection was held, mean | 0.21 ms (57.995 s over 276,777 uses) | `hikaricp_connections_usage_seconds` |
-| Time to get a connection, mean | 90 ms (25,324 s over 281,760 gets) | `hikaricp_connections_acquire_seconds` |
-| Pool timeouts | 4,983 | `hikaricp_connections_timeout_total` |
-| Query time in Postgres, mean / max | 0.024 / 22.3 ms | `pg_stat_statements` |
-| CPU, first 15 s of samples / rest of the run | 90–94% user, 1–3% idle / 18–31% user, 60–73% idle | `top -b -d 5` |
-| CPU per process, mean (of 800%) | k6 228, java 151, postgres 18, docker-proxy 14 | `top -b -d 5` |
-| k6 error text | `request timeout` (k6's 5 s timeout) | k6 log |
-| k6 VUs (max) | 10,081 | k6 `vus` |
-| k6 `http_req_connecting` p99 / max | 1,015 / 4,138 ms | k6 |
+| Measurement | diag-direct-4000 | diag-direct-4000-top | Source |
+|---|---|---|---|
+| Error % (measured scenario) | 6.374 | 6.452 | k6 summary |
+| Failed checks, whole run | 22,088 | 28,721 | k6 summary |
+| of which k6 `request timeout` (5 s) | 17,105 | 17,755 | k6 log |
+| Pool timeouts (HTTP 500) | 4,983 | not read | `hikaricp_connections_timeout_total` |
+| Most waiters in a pool timeout message | 6,029 | 8,172 | app log (`waiting=`) |
+| Pool timeout messages with `active=10, idle=0` | 2,505 | 8,761 | app log |
+| Time a connection was held, mean over the run | 0.21 ms (57.995 s over 276,777 uses) | not read | `hikaricp_connections_usage_seconds`, read live, not saved |
+| Time to get a connection, mean over the run | 90 ms (25,324 s over 281,760 gets) | not read | `hikaricp_connections_acquire_seconds`, read live, not saved |
+| Query time in Postgres, mean / max | 0.024 / 22.3 ms | not read | `pg_stat_statements`, read live, not saved |
+| k6 VUs, most active / initialized | 6,189 / 10,000 | 10,081 / 10,098 | k6 `vus`, `vus_max` |
+| `http_req_connecting` p99 / max | 1.30 / 3,079 ms | 1,015 / 4,138 ms | k6 summary |
+
+- When the failures happened: in `diag-direct-4000-top` every pool timeout in the app log is between 2 s
+  and 10 s after k6 started, inside the warmup. The `request timeout` failures came in bursts about every
+  7 s through the whole run, in both runs.
+- CPU in `diag-direct-4000-top` (5 s samples; k6 started at 03:14:08.8 and ended at about 03:15:24; the
+  capture stopped at 03:15:05):
+
+| Sample end | User / idle % | k6 | java | postgres |
+|---|---|---|---|---|
+| 03:14:00, 03:14:05 (before k6 started the test) | 91.9–93.6 / 0.0–0.9 | 755, 775 | 0, 14 | 0, 0 |
+| 03:14:10 to 03:14:20 | 59.4–90.5 / 1.3–26.7 | 142–568 | 196–554 | 3–38 |
+| 03:14:25 to 03:15:05 | 18.2–31.1 / 59.2–73.3 | 103–202 | 81–93 | 25–28 |
 
 After the change (`m12-direct-*`, one run each):
 
@@ -473,26 +488,34 @@ After the change (`m12-direct-*`, one run each):
 | 5000 | 5000.0 | 4996.8 | 0.32 / 0.48 / 2.75 | 45.2 | 0.000 | 0 | 0; 5745 | 640 |
 | 6000 | 6000.1 | 5995.0 | 0.35 / 0.88 / 4.80 | 53.3 | 0.000 | 11 | 0; 10651 | 851 |
 
-- `http_req_connecting` p99 after the change: 0.047–0.062 ms at every rate.
+- After the change: 0 `request timeout` failures in every run. Pool timeouts: 0, 0, 1 and 15, all in the
+  warmup. `http_req_connecting` p99 0.047–0.062 ms; max 7.1–18.9 ms, except 1,059 ms in the 6000 run.
 - What happened :
-  The 4000 req/s failure was in the load generator setup, not in the app or the database. `lib.js`
-  preallocated `RATE * 2.5` VUs, 10,000 at 4000 req/s. Each k6 VU keeps its own keep-alive connection, and
-  the arrival-rate executor rotates through all of them, so k6 opened about 10,000 connections. Tomcat
-  accepts 8,192; the rest waited in the accept queue and its overflow, so k6 saw 1 s SYN retries
-  (`http_req_connecting` p99 1,015 ms) and then its 5 s timeout. At 3000 req/s the old sizing gave 7,500
-  VUs, under the limit, which is why the cliff was between 3000 and 4000. The pool was not the cause: a
-  connection was held for 0.21 ms on average, so fewer than one of the 10 was busy on average, and Postgres
-  ran the query in 0.024 ms. In `diag-direct-4000-top`, every pool timeout in the app log is between 2 s
-  and 10 s after k6 started, inside the warmup, when the CPU was 90–94% busy. The likely cause is the cold
-  JVM and k6 starting 10,000 VUs at once, so a waiting virtual thread didn't get CPU in time to take a
-  returned connection; the per-process split of that window wasn't measured. This corrects the step 1 entry, which said all 10 connections were busy.
-  With VUs sized for the concurrency (`RATE * 0.1` preallocated, at most 8,000), direct mode ran 4000,
-  5000 and 6000 req/s with 0 errors and 0 measured drops; p99 rose from 2.30 to 4.80 ms. The 3000 run
+  The 4000 req/s runs failed in two ways at two times. In the warmup, the pool saturated: all 10
+  connections checked out and up to 8,172 requests waiting, and thousands timed out after 2 s. The CPU was
+  fully busy then. Before the test started, k6 used 755–775% while it started 10,000 VUs; in the first
+  seconds of traffic the JVM used up to 554%. Postgres was not the cause (0.024 ms per query on average),
+  and over the whole run a connection was held for only 0.21 ms on average, so the saturation was a warmup
+  event. Most likely, the threads that held or waited for connections didn't get CPU.
+  In the measured phase, the pool didn't time out, the CPU was 59–73% idle, and requests still failed: about
+  17,000 per run hit k6's 5 s timeout, in bursts about every 7 s. The likely cause is the connection count.
+  `lib.js` preallocated `RATE * 2.5` VUs, 10,000 at 4000 req/s; each k6 VU keeps its own keep-alive
+  connection, so up to 10,000 connections could be open (an idle VU keeps its connection too, which is how
+  `diag-direct-4000` could have passed 8,192 with at most 6,189 active VUs). Tomcat accepts 8,192. The connection count
+  wasn't captured (no `ss`), so this is inferred, not measured. At 3000 req/s the old sizing gave 7,500 VUs,
+  under the limit.
+  The fix supports it: with `RATE * 0.1` VUs preallocated (at most 8,000), the client timeouts went to 0 at
+  4000, 5000 and 6000 req/s, and the warmup pool timeouts nearly went away (at most 15), likely because k6
+  no longer starts thousands of VUs at once. p99 rose from 2.30 to 4.80 ms between 4000 and 6000. The 3000 run
   matches step 2 (p99 1.61 vs 1.69 ms), so the change didn't shift the earlier results. 6000 req/s is the
   highest rate tried, not a measured limit.
-- What stays: k6 now drops warmup iterations at every rate (1,207 to 10,651), because it adds VUs while
-  the cold JVM is slow, and so k6 exits 99. The warmup is discarded and the measured phase dropped none.
-  More preallocated VUs would remove the drops but bring back thousands of connections.
-- Not rerun: the cluster at 3000 req/s (step 4) used the old sizing, 7,500 connections through nginx. Its
-  overload was put down to 1 vCPU per node; these runs don't show if the connection count added to it.
-- Next change : Rerun the cluster at 3000 req/s with the new sizing to separate the two causes.
+  This corrects the step 1 entry in part: the pool did saturate, but only in the warmup, and the
+  measured-phase errors were client timeouts.
+- What stays: k6 drops warmup iterations at every rate now (1,207 to 10,651), because it adds VUs while the
+  cold JVM is slow, so k6 exits 99. The old sizing dropped warmup iterations too in one of the two runs
+  (2,180). The warmup is discarded and the measured phase dropped none. More preallocated VUs would remove
+  the drops but bring back thousands of connections.
+- Not rerun: the cluster at 3000 req/s (step 4) used the old sizing, 7,500 VUs through nginx. Its overload
+  was put down to 1 vCPU per node; these runs don't show whether the VU count added to it.
+- Next change : Capture `ss -s` during a run to confirm the connection count, and rerun the cluster
+  at 3000 req/s with the new sizing to separate the two causes.
