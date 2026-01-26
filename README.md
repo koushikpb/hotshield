@@ -37,6 +37,10 @@ Zipf(1.1) reads over 1M rows, one node, 3000 req/s:
 | Cache only | 674.8 | 0.2251 | 0.22 | 1.29 | 0.000 |
 | Cache + coalescing | 674.7 | 0.2250 | 0.22 | 1.18 | 0.000 |
 
+Direct mode first failed at 4000 req/s (6.374% errors). The cause was mostly the load generator: k6 started
+10,000 VUs, each with its own connection. With VUs sized for the real concurrency, direct mode ran 4000, 5000
+and 6000 req/s with 0 errors (p99 2.30, 2.75 and 4.80 ms); 6000 is the highest rate tried.
+
 Thundering herd: a PUT drops the hot key, then 200 reads of it arrive together (50 ms artificial DB delay):
 
 | Mode | Queries in the second after the PUT | Burst p50 / p99 (ms) |
