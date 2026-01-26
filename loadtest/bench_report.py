@@ -104,7 +104,9 @@ def main(out):
 
     print(f"### {m['NAME']}")
     print(f"- Commit: {m['COMMIT']}")
-    print(f"- Mode: {m['MODE']} ({m['TARGET']}; k6, the app and Postgres share one machine)")
+    where = ('k6 on the runner, three Fargate tasks, RDS' if m['TARGET'] == 'aws'
+             else 'k6, the app and Postgres share one machine')
+    print(f"- Mode: {m['MODE']} ({m['TARGET']}; {where})")
     print(f"- Load: {m['SCENARIO']}, RATE={m['RATE']}, DURATION={m['DURATION']}, WARMUP={m['WARMUP']}, SEED=1, "
           f"MAX_ID=1000000 {m['K6_ENV']}".rstrip())
     if m.get('K6_BASE_URL'):
