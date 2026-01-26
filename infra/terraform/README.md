@@ -61,6 +61,23 @@ git clone <your repo url> hotshield && cd hotshield
 k6 run -e BASE_URL=<alb_url> loadtest/<scenario>.js
 ```
 
+For a recorded run, use `loadtest/cloud_bench.sh` instead of plain k6: it resets `pg_stat_statements`, polls the
+nodes and prints the same report as `bench.sh`. Pass the node names, not task IPs, so the poller follows a
+replaced task:
+
+```sh
+BASE_URL=<alb_url> PGHOST=<rds_endpoint> COMMIT=<sha> \
+  NODE_URLS="http://node-a.hotshield.local:8080 http://node-b.hotshield.local:8080 http://node-c.hotshield.local:8080" \
+  loadtest/cloud_bench.sh aws-zipf-distributed-500 distributed zipf.js 500
+```
+
+The poller sums counters across nodes, so a replaced task's counters (starting at 0) make the sums drop. For a
+run with a task replacement, count only the positive steps between samples.
+
+If the commits you want to run aren't pushed, the runner can't clone them. `aws ssm send-command` with a
+base64 `git archive HEAD loadtest | gzip` works for the scripts (about 27 KB), and SSM returns at most 24,000
+characters of output per command, so copy results back in chunks.
+
 The runner can also reach each node directly on `:8080` (via its task IP) and RDS on 5432. To seed or to reset
 `pg_stat_statements` between runs, run `loadtest/seed.sql` from the runner with `psql -f`, using `rds_endpoint`,
 user `hotshield` and the password from SSM:
