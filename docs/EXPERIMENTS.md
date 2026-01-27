@@ -529,7 +529,11 @@ After the change (`m12-direct-*`, one run each):
 - Load: `zipf.js` through the ALB, DURATION=60s, WARMUP=30s, SEED=1, MAX_ID=1000000. Seeded once with
   `seed.sql`; every run prewarmed `items` and `items_pkey` and reset `pg_stat_statements`
   (`loadtest/cloud_bench.sh`). The mode is changed with `terraform apply -var hotshield_mode=...`, which
-  replaces the three tasks, so each run below except `distributed-500` started on fresh JVMs.
+  replaces the three tasks, so each run below except `distributed-500` started on fresh JVMs. The runs
+  didn't start from the same state: k6 started `coalesce-500` 3 s before node-a's service reported steady,
+  and `distributed-500-fresh` before node-b's deployment completed (a node didn't answer the poller at
+  -23.7 s, and the warmup dropped 1,330 iterations against 160 and 198). `cloud_bench.sh` now waits for
+  every node to answer before it starts k6.
 - Hypothesis: none was written before the runs.
 
 | Run | Mode | RATE | Achieved req/s | DB queries/s | DB queries per GET | p50 / p95 / p99 (ms) | Max (ms) | Error % | Pool pending (max) | Dropped (measured; warmup) | Forwards ok / fallback |
@@ -558,14 +562,15 @@ average / maximum %, saved as `cloudwatch-cpu.txt`):
   At 1000 req/s, the rate the local three-node cluster held, the AWS cluster was overloaded: every task hit
   100% CPU, up to 810 requests waited for a pool connection, 3,100 forwards to an owner timed out after
   500 ms and fell back to the database, and k6 dropped 5,366 measured iterations. RDS stayed at 11% CPU, so
-  the limit was the 1 vCPU per task, not the database. A Fargate vCPU did less work than one of the VM's
-  c7i vCPUs here; these runs don't say by how much. At 500 req/s every mode ran with 0 errors and 0 measured
+  the limit was the 1 vCPU per task, not the database. The same rate held locally on 1 vCPU per node, so a
+  Fargate vCPU likely did less work than one of the VM's c7i vCPUs, but the setups also differ in the ALB,
+  the network hop to RDS and where the poller runs; these runs don't separate those. At 500 req/s every mode ran with 0 errors and 0 measured
   drops. The result matches the local cluster runs in direction: each node's cache cut DB queries per
   request from 1.0000 to 0.3891, and one owner per key cut them further to 0.3198 (local at 1000 req/s:
-  0.3464 and 0.2794). Distributed paid for it in the tail: p99 19.69 ms on fresh JVMs against 9.06 ms
-  for coalesce, because a miss on a non-owner is one more network hop. The same mode on warm JVMs had
-  p99 8.88 ms, so part of that gap is the JIT still warming on 1 vCPU; one run each doesn't separate the
-  two.
+  0.3464 and 0.2794). The tail doesn't give a clear answer: distributed had p99 19.69 ms on fresh JVMs
+  against 9.06 ms for coalesce, but 8.88 ms on warm JVMs. A miss on a non-owner is one more network hop,
+  and the JIT was still warming on 1 vCPU; with one run each, and the start-state differences above, these
+  runs don't show how much of the gap is either.
 - Next change : Run each mode twice, warmup 60 s, to tell the cold-JVM effect from the extra hop; and find the
   rate between 500 and 1000 where 1 vCPU tasks start to queue.
 
@@ -609,12 +614,16 @@ from the poller and the node logs):
 - The 120 s run had the same order of events with different gaps: ALB deregistration at +33.5, the first
   forward failure in the node logs at +40.6, the old JVM's graceful shutdown at +74.4, and the replacement
   started at +112.6, so its window ended before the recovery. All 4,815 forward failures in its node logs
-  read `I/O error on GET request for "http://node-b.hotshield.local:8080/internal/items/N": null`.
+  read `I/O error on GET request for "http://node-b.hotshield.local:8080/internal/items/N": null` (read from
+  CloudWatch Logs for +25 s to +125 s and not saved; the report counts 4,814 fallbacks inside the measured
+  window).
 - The 300 s report's server-side rows are corrected by hand: the poller sums counters across nodes, and the
   replacement's counters start at 0, which makes the sums drop when it appears. The forward and DB numbers
-  above add only positive steps between samples. Server GETs in the window still came to 485.0/s against
-  k6's 499.9/s: from +47.6 to +70.0 the old node-b took ALB traffic but the poller couldn't reach it by
-  name, so those GETs weren't counted.
+  above add only positive steps between samples, so they are lower bounds. They miss what the old node-b
+  served while the poller couldn't reach it (+47.6 to +70.0, when the ALB still sent it traffic), what the
+  replacement served from its ALB registration (+184.3) to the first sample that reached it, and the other
+  nodes' counts in that one 200 ms step, which was thrown away with the reset. Server GETs in the window
+  came to 485.0/s against k6's 499.9/s.
 - What happened :
   Killing one of three tasks caused no failed requests. What failed was the name: about 10 s after the stop,
   `node-b.hotshield.local` stopped working for the other nodes, most likely because ECS removed the Cloud Map
@@ -623,10 +632,15 @@ from the poller and the node logs):
   second. These fallbacks were fast (p99 9.95 ms in the first run), unlike the paused-node run in step 5
   (p99 501.21 ms), where the owner's address still resolved and each forward waited the full 500 ms
   timeout. The ALB stopped sending node-b traffic once it deregistered the task. The recovery took about
-  172 s from the stop to the last fallback, and most of it was waiting: up to 40 s for ECS to deregister,
-  the 30 s drain, the old task's stop, then a cold start of the replacement and its health checks. With
-  `deployment_maximum_percent` 100, ECS doesn't start the replacement until the old task is gone. The 16
+  172 s from the stop to the last fallback (+202.3), which came after the replacement was registered in
+  the ALB (+184.3). The parts: ECS deregistered the task 39.9 s after the stop (3.4 s in the 120 s run;
+  these runs don't show why the two differ), the 30 s drain ended at about +100, ECS started the
+  replacement 46 s after that (the old task's stop and the scheduling; not broken down further), and the
+  replacement took 38 s to start and pass its health checks. With `deployment_maximum_percent` 100, ECS
+  doesn't start the replacement until the old task is gone. The kill caused no failed requests, but k6
+  exited 99 because of the 16 dropped measured iterations. The 16
   dropped iterations and the 754 ms max in the 300 s run point to a short stall; these numbers don't show
   when it was.
-- Next change : Lower `deregistration_delay` (the app has no long requests to drain) and measure the recovery
-  again; record the k6 errors per second so the stall can be placed on the timeline.
+- Next change : Lower `deregistration_delay` (the app has no long requests to drain), which can save at most the
+  30 s drain, and measure the recovery again; break down the 46 s before the replacement started from the
+  ECS task events; record k6 errors and drops per second so the stall can be placed on the timeline.

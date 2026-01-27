@@ -72,7 +72,8 @@ BASE_URL=<alb_url> PGHOST=<rds_endpoint> COMMIT=<sha> \
 ```
 
 The poller sums counters across nodes, so a replaced task's counters (starting at 0) make the sums drop. For a
-run with a task replacement, count only the positive steps between samples.
+run with a task replacement, count only the positive steps between samples. That gives lower bounds: it loses
+what a node served while the poller couldn't reach it and the other nodes' counts in the step that was dropped.
 
 If the commits you want to run aren't pushed, the runner can't clone them. `aws ssm send-command` with a
 base64 `git archive HEAD loadtest | gzip` works for the scripts (about 27 KB), and SSM returns at most 24,000
