@@ -55,6 +55,19 @@ Three nodes (1 vCPU each) behind nginx, zipf, 1000 req/s:
 | Three independent caches | 346.5 | 0.3464 | 0.48 | 2.60 | 0.000 |
 | Distributed (one owner per key) | 279.2 | 0.2794 | 0.37 | 13.64 | 0.000 |
 
+On AWS (us-east-2): three Fargate tasks (1 vCPU each) behind an ALB, RDS PostgreSQL 16 `db.m7g.large`, k6 on a
+`c7g.large` in the same AZ, zipf at 500 req/s, fresh tasks for each mode:
+
+| Mode | DB queries/s | DB queries per request | p50 (ms) | p99 (ms) | Error % |
+|---|---|---|---|---|---|
+| Direct PostgreSQL | 500.3 | 1.0000 | 1.89 | 14.27 | 0.000 |
+| Three independent caches | 195.0 | 0.3891 | 1.78 | 9.06 | 0.000 |
+| Distributed (one owner per key) | 159.5 | 0.3198 | 1.92 | 19.69 | 0.000 |
+
+At 1000 req/s the 1 vCPU tasks ran at 100% CPU and the run failed (1.512% errors). Stopping one of the three
+tasks at 500 req/s caused no failed requests: the other nodes read the database directly for the dead node's
+keys until the replacement was healthy, about 172 s after the stop.
+
 Every run, including the ones that failed and why, is logged in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md);
 the run plan is in [loadtest/README.md](loadtest/README.md).
 
