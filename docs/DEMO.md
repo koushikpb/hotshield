@@ -65,6 +65,9 @@ phase, about 17,000 requests hit k6's 5 s timeout, most likely because 10,000 VU
 than Tomcat's 8192. Postgres took 0.024 ms per query. With VUs sized for the real concurrency, direct mode
 ran 6000 req/s with 0 errors.
 
-## 2:40 – 3:00 Close
+## 2:40 – 3:00 AWS and close
 
-Say what you would do next: run the same experiments on AWS behind an ALB, and kill one ECS task under load.
+Show the AWS table in the README: the same order on three Fargate tasks behind an ALB at 500 req/s. Say that
+stopping one task caused no failed requests; the other nodes read the database for its keys for about 172 s
+until the replacement was healthy, and most of that time was ECS draining and replacing the task. Close
+with what you would change next: a shorter ALB deregistration delay, and per-second error counts in k6.
