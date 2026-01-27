@@ -1,7 +1,7 @@
 """Samples the server counters every 200ms and prints one JSON line per sample, summed across nodes.
 
 bench.sh runs this in a container, so its timestamps come from the same Docker VM clock as k6's
-test_start_ms; on the host the two clocks could disagree. A node that doesn't answer contributes its last
+test_start_ms; on the host the two clocks could disagree. cloud_bench.sh runs it on the runner, beside k6. A node that doesn't answer contributes its last
 known counters and is listed under "down", so a paused node shows up in the data instead of as a gap.
 """
 import json

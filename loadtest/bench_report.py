@@ -2,7 +2,7 @@
 
 k6 numbers come from its summary (measured scenario only). Server counters come from the poller, cut to the
 measured window: setup() logs the test start, and the measured phase runs from start + WARMUP for DURATION.
-Both timestamps come from the Docker VM clock.
+Both timestamps come from one clock: the Docker VM's for bench.sh, the runner's for cloud_bench.sh.
 """
 import json
 import re
@@ -47,6 +47,12 @@ def metric(summary, name):
     return summary['metrics'].get(name, {})
 
 
+def node_name(url):
+    """The port locally (8081-8083), the host on AWS, where every node listens on 8080."""
+    host, port = url.split('//', 1)[1].rsplit(':', 1)
+    return host.split('.')[0] if port == '8080' and host != 'host.docker.internal' else port
+
+
 def down_intervals(rows, start):
     """Spans of samples where some node didn't answer, relative to the measured start."""
     spans, current = [], None
@@ -60,7 +66,7 @@ def down_intervals(rows, start):
             current = None
     if current is not None:
         spans.append(current)
-    return [f"{','.join(u.rsplit(':', 1)[1] for u in nodes)} down {a - start:+.1f}s to {b - start:+.1f}s"
+    return [f"{','.join(node_name(u) for u in nodes)} down {a - start:+.1f}s to {b - start:+.1f}s"
             for a, b, nodes in spans]
 
 
