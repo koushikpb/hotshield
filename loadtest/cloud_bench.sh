@@ -3,15 +3,16 @@
 # run k6 against the ALB, then print the same report as bench.sh. Terraform owns the app and the database,
 # so this script starts and stops nothing; apply the mode you want before the run.
 #
-#   BASE_URL=http://<alb> NODE_URLS="http://10.0.0.5:8080 ..." PGHOST=<rds> COMMIT=<sha> \
+#   BASE_URL=http://<alb> NODE_URLS="http://node-a.hotshield.local:8080 ..." PGHOST=<rds> COMMIT=<sha> \
 #     loadtest/cloud_bench.sh NAME MODE SCENARIO RATE
 #
-# MODE is recorded, not set: pass what `terraform output -json run_config` says. PGPASSWORD comes from SSM if
+# MODE and COMMIT are recorded, not checked: pass what `terraform output -json run_config` and git say. Use the
+# Cloud Map names in NODE_URLS, not task IPs, so the poller follows a replaced task. PGPASSWORD comes from SSM if
 # it isn't set. DURATION, WARMUP, K6_ENV and RESEED work as in bench.sh.
 set -euo pipefail
 
 if [[ $# -ne 4 ]]; then
-  sed -n '2,10p' "$0"
+  sed -n '2,11p' "$0"
   exit 2
 fi
 NAME=$1 MODE=$2 SCENARIO=$3 RATE=$4
@@ -41,6 +42,17 @@ psql_q() {
   psql -qAt -v ON_ERROR_STOP=1 "$@"
 }
 
+# An apply returns before every replaced task answers, and a run that starts then measures a node that is
+# still starting.
+for url in $NODE_URLS; do
+  for _ in $(seq 1 90); do
+    curl -sf "$url/actuator/health" >/dev/null && continue 2
+    sleep 2
+  done
+  echo "$url did not become healthy" >&2
+  exit 1
+done
+
 if [[ ${RESEED:-0} == 1 ]]; then
   psql_q -f loadtest/seed.sql >/dev/null
   psql_q -c 'vacuum analyze items' -c 'checkpoint' >/dev/null
@@ -60,6 +72,8 @@ WARMUP=$WARMUP
 APP_ENV=""
 K6_ENV="${K6_ENV:-}"
 K6_BASE_URL=""
+BASE_URL=$BASE_URL
+NODE_URLS="$NODE_URLS"
 RESEED=${RESEED:-0}
 FAULT=""
 COMMIT=$COMMIT
