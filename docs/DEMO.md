@@ -68,6 +68,7 @@ ran 6000 req/s with 0 errors.
 ## 2:40 – 3:00 AWS and close
 
 Show the AWS table in the README: the same order on three Fargate tasks behind an ALB at 500 req/s. Say that
-stopping one task caused no failed requests; the other nodes read the database for its keys for about 172 s
-until the replacement was healthy, and most of that time was ECS draining and replacing the task. Close
-with what you would change next: a shorter ALB deregistration delay, and per-second error counts in k6.
+stopping one task caused no failed requests (k6 still dropped 16 iterations); the other nodes read the
+database for its keys for about 172 s, until shortly after the replacement was registered, and most of that
+time was ECS deregistering, draining and replacing the task. Close with what you would change next: a
+shorter ALB deregistration delay (it saves at most 30 s), and per-second error counts in k6.

@@ -56,7 +56,7 @@ Three nodes (1 vCPU each) behind nginx, zipf, 1000 req/s:
 | Distributed (one owner per key) | 279.2 | 0.2794 | 0.37 | 13.64 | 0.000 |
 
 On AWS (us-east-2): three Fargate tasks (1 vCPU each) behind an ALB, RDS PostgreSQL 16 `db.m7g.large`, k6 on a
-`c7g.large` in the same AZ, zipf at 500 req/s, fresh tasks for each mode:
+`c7g.large` in the same AZ, zipf at 500 req/s, fresh tasks for each mode, one run each:
 
 | Mode | DB queries/s | DB queries per request | p50 (ms) | p99 (ms) | Error % |
 |---|---|---|---|---|---|
@@ -64,9 +64,13 @@ On AWS (us-east-2): three Fargate tasks (1 vCPU each) behind an ALB, RDS Postgre
 | Three independent caches | 195.0 | 0.3891 | 1.78 | 9.06 | 0.000 |
 | Distributed (one owner per key) | 159.5 | 0.3198 | 1.92 | 19.69 | 0.000 |
 
+Distributed's p99 was 8.88 ms in an earlier run on warm JVMs, so one run doesn't show how much of its tail
+is the extra hop and how much is the JIT still warming.
+
 At 1000 req/s the 1 vCPU tasks ran at 100% CPU and the run failed (1.512% errors). Stopping one of the three
-tasks at 500 req/s caused no failed requests: the other nodes read the database directly for the dead node's
-keys until the replacement was healthy, about 172 s after the stop.
+tasks at 500 req/s caused no failed requests (16 iterations were dropped in the 300 s run): the other nodes
+read the database directly for the dead node's keys for about 172 s, until shortly after the replacement
+was registered in the ALB.
 
 Every run, including the ones that failed and why, is logged in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md);
 the run plan is in [loadtest/README.md](loadtest/README.md).
