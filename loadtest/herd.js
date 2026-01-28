@@ -8,7 +8,8 @@
 // starts, and their latency is reported on its own. The burst is placed on the clock, not on the
 // PUT's response, so a slow PUT can push the invalidation past the burst; check the PUT's latency
 // in the summary.
-// Run the app with HOTSHIELD_CACHE_TTL and HOTSHIELD_DB_DELAY set as described in README.md.
+// Run the app with HOTSHIELD_CACHE_TTL=10m and HOTSHIELD_DB_DELAY=50ms, so the refill after the PUT is
+// slow enough for the burst to land in the miss window.
 // k6 run -e RATE=300 -e DURATION=60s -e SEED=1 -e HERD_AT=20s -e BURST_DELAY=10ms loadtest/herd.js
 import http from 'k6/http';
 import { check } from 'k6';

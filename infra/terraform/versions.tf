@@ -16,7 +16,7 @@ terraform {
 provider "aws" {
   region = var.region
 
-  # Every resource carries Project=hotshield, which is what the after-destroy check in README.md searches for.
+  # Every resource carries Project=hotshield, so a tag search after destroy shows anything left behind.
   default_tags {
     tags = {
       Project = "hotshield"

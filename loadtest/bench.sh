@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One measured run: restart the app in MODE, reset pg_stat_statements, poll the server counters, run k6,
-# then print the numbers for a docs/EXPERIMENTS.md entry. Results go to loadtest/results/NAME (gitignored).
+# then print the numbers for the run. Results go to loadtest/results/NAME (gitignored).
 #
 #   loadtest/bench.sh NAME MODE SCENARIO RATE
 #   loadtest/bench.sh zipf-direct-800 direct zipf.js 800

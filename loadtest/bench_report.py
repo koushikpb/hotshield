@@ -1,4 +1,4 @@
-"""Prints the docs/EXPERIMENTS.md numbers for one bench.sh run directory.
+"""Prints the numbers for one bench.sh or cloud_bench.sh run directory.
 
 k6 numbers come from its summary (measured scenario only). Server counters come from the poller, cut to the
 measured window: setup() logs the test start, and the measured phase runs from start + WARMUP for DURATION.

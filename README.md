@@ -7,8 +7,7 @@ invalidate cached copies. `hotshield.mode` switches the same build between `dire
 
 ## Results
 
-Single runs, open-loop load, 60 s measured after a discarded warmup. Every run is logged in
-[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
+Single runs, open-loop load, 60 s measured after a discarded warmup.
 
 One node on an EC2 `c7i.2xlarge` (k6, app and PostgreSQL 16 on the same machine), zipf reads over 1M rows,
 3000 req/s:
@@ -55,5 +54,22 @@ docker compose exec -T postgres psql -U hotshield hotshield < loadtest/seed.sql 
 ./gradlew test      # unit and Testcontainers tests
 ```
 
-Three nodes behind nginx: `docker compose --profile cluster up -d --build`. Load tests: [loadtest/README.md](loadtest/README.md).
-AWS: [infra/terraform/README.md](infra/terraform/README.md).
+Three nodes behind nginx: `docker compose --profile cluster up -d --build`.
+
+Load tests (k6 runs in Docker; results go to `loadtest/results/`, gitignored):
+
+```bash
+loadtest/bench.sh zipf-direct-3000 direct zipf.js 3000
+TARGET=cluster loadtest/bench.sh zipf-dist-1000 distributed zipf.js 1000
+```
+
+AWS (ECS Fargate, RDS, ALB; it bills by the hour, so destroy it after each session):
+
+```bash
+cd infra/terraform && terraform init
+VARS="-var allowed_cidr=$(curl -s https://checkip.amazonaws.com)/32 -var image_tag=$(git rev-parse --short HEAD)"
+terraform apply -target=aws_ecr_repository.app $VARS
+terraform output -raw docker_push_commands   # run these from the repo root
+terraform apply $VARS
+terraform destroy $VARS
+```

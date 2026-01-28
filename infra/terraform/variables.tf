@@ -32,7 +32,7 @@ variable "cache_ttl" {
 }
 
 variable "db_delay" {
-  description = "Artificial DB delay for herd runs only, see loadtest/README.md."
+  description = "Artificial DB delay, for herd runs only."
   type        = string
   default     = "0ms"
 }

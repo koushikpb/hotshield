@@ -40,8 +40,8 @@ output "runner_ssm_command" {
   value = var.enable_runner ? "aws ssm start-session --region ${var.region} --target ${aws_instance.runner[0].id}" : null
 }
 
-# Everything that changes a measurement without changing the code. Copy it into docs/EXPERIMENTS.md with
-# each run: terraform output -json run_config
+# Everything that changes a measurement without changing the code. Save it with each run:
+# terraform output -json run_config
 output "run_config" {
   value = {
     image_tag                 = var.image_tag
